@@ -194,7 +194,9 @@ html, body { touch-action: manipulation; } /* 不讓點兩下放大整頁；單�
 body.no3d { overflow: auto; }
 body.no3d .stage { position: relative; height: calc(var(--header-h) + 120px); }
 body.no3d .drawer { position: relative; transform: none; height: auto; border-radius: 22px; margin: 0 8px 20px; }
-body.no3d .handle, body.no3d .stage-tools, body.no3d .hint { display: none; }
+body.no3d .handle, body.no3d .hint, body.no3d #resetView { display: none; }
+/* 清單模式仍保留背景音樂按鈕（固定在右下角） */
+body.no3d .stage-tools { position: fixed; right: 12px; bottom: calc(var(--safe-b) + 12px); z-index: 40; }
 
 /* 桌機：右側固定面板 */
 @media (min-width: 900px) {
@@ -212,6 +214,7 @@ body.no3d .handle, body.no3d .stage-tools, body.no3d .hint { display: none; }
   .tag-bubble { max-width: 170px; } .tag-step { max-width: 150px; }
   body.no3d .drawer { position: fixed; }
   body.no3d .stage { position: fixed; height: auto; }
+  body.no3d .stage-tools { position: absolute; bottom: 18px; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 /* 被避讓推高的名牌：用細線連回人物 */
@@ -299,3 +302,10 @@ body[data-theme="day"] .sub { display: inline-block; color: #f4f6ff; background:
 .musicbtn[data-state="off"] { opacity: .75; }
 .musicbtn[data-state="pending"] .wv { opacity: .45; }
 .musicbtn[data-state="on"] { border-color: rgba(120, 220, 170, .55); }
+
+/* 手機：重設視角按鈕觸控範圍至少 44×44（桌機外觀不變） */
+@media (max-width: 899px) {
+  #resetView { min-height: 44px; min-width: 44px; display: inline-flex; align-items: center; justify-content: center; }
+  /* 清單模式：音樂按鈕所在的 .stage 疊在清單之上（.stage 只占頁首下方一小塊，不會蓋到清單內容） */
+  body.no3d .stage { z-index: 41; }
+}
