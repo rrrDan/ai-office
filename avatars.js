@@ -3,9 +3,9 @@ import * as THREE from './vendor/three/three.module.min.js';
 
 export const AVATAR_SETS = [
   { id: 'mark',   name: '標記吉祥物', desc: '用各 bot 的標記形狀做成的圓潤小精靈（預設）' },
-  { id: 'office', name: '上班族',     desc: '坐在辦公桌前的低多邊形小人' },
+  { id: 'office', name: '上班族',     desc: '深色頭髮、白襯衫打紅領帶，外套是 bot 的顏色' },
   { id: 'robot',  name: '圓圓機器人', desc: '圓滾滾的機器人，面罩會發光' },
-  { id: 'cat',    name: '貓咪同事',   desc: '有耳朵和尾巴的貓咪' },
+  { id: 'cat',    name: '貓咪同事',   desc: '尖耳朵、白鬍鬚、綠眼睛，還有翹尾巴' },
   { id: 'astro',  name: 'Q 版太空人', desc: '戴頭盔、背背包的太空人' },
 ];
 export const DEFAULT_SET = 'mark';
