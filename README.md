@@ -1,2 +1,54 @@
-# ai-office
-AI 辦公室：用手機就能看的 3D 辦公大樓，即時顯示各 AI 助理的狀態（唯讀）
+# AI 辦公室
+
+一個可以用手機看的 3D 辦公大樓頁面，即時顯示各個 AI 助理（bot）目前在做什麼。
+
+- 3 層樓：3F Nori；2F Meron、Yuzu、Goya、Ichigo；1F 阿卡拉專案經理。
+- 每位 bot 坐在自己的座位，頭上有名牌與狀態泡泡（工作中／完成／待命／等待用戶／錯誤）、目前步驟。
+- 下方抽屜（桌機為右側面板）：各 bot 狀態與最後更新時間、用量概況、各 bot 排程、最近事件。
+- 單指拖曳旋轉、雙指縮放／平移，點名牌或人物可看詳情；「重設視角」回到預設畫面。
+- 裝置不支援 WebGL 時，自動改成清單檢視，資料一樣完整。
+
+## 使用方式
+
+在網址最後加上頻道代號：
+
+```
+https://rrrdan.github.io/ai-office/#<頻道代號>
+```
+
+頻道代號只放在網址的 `#` 後面，不會送到 GitHub，也沒有寫在原始碼裡。沒加代號時，頁面會提示你怎麼加。
+
+## 資料與隱私
+
+- **唯讀**：只用 GET 讀取 `https://ntfy.sh/<頻道代號>` 的訊息（先讀歷史，再用 SSE 即時更新；SSE 失敗時每 15 秒輪詢一次）。不會發送或修改任何訊息。
+- 最後已知的狀態會存在這台裝置瀏覽器的 localStorage，ntfy 的訊息過期後仍看得到。頁面底部可「清除這台裝置的快取」。
+- 沒有追蹤、分析、廣告或外部字型；除了 ntfy 之外不連任何外部服務。
+- 所有時間以台北時間（Asia/Taipei，UTC+8）顯示。
+
+## 支援的訊息格式（ntfy `message` 欄位內的 JSON）
+
+| 類型 | 格式 |
+|---|---|
+| 狀態 | `{"bot": 名稱, "status": "working｜done｜idle｜waiting_user｜error", "step": 文字}` |
+| 名冊 | `{"roster": [名稱, ...]}` |
+| 外型 | `{"looks": {名稱: {"shape", "color", "accessory"}}}` |
+| 分組 | `{"groups": {名稱: 分組}}` |
+| 對話連結 | `{"chat": {名稱: 連結}}` |
+| 用量 | `{"type": "usage", "total_used_pct", "resets_at", "bots": {名稱: 數字}}` |
+| 排程 | `{"routines": {"bot": 名稱, "items": [{"name", "schedule", "next_run"}]}}` |
+
+不認得或格式錯誤的訊息會略過或列為「其他訊息」，不會讓頁面壞掉。
+
+## 檔案
+
+- `index.html`、`style.css`：頁面與樣式（系統字型，無外部資源）
+- `app.js`：讀取 FEED、抽屜與清單畫面
+- `feed.js`：訊息解析與狀態管理（純邏輯，可在 Node 測試）
+- `office3d.js`：3D 大樓、家具與人物（全部用程式產生的低多邊形幾何與畫布貼圖，沒有使用外部模型或圖片）
+- `vendor/three/`：three.js r170（npm `three@0.170.0`）的 `three.module.min.js` 與 `OrbitControls.js`，MIT 授權，見 `vendor/three/LICENSE`
+
+## 授權
+
+本專案程式碼為從頭獨立撰寫，採 MIT 授權（見 `LICENSE`）。
+
+第三方元件：three.js r170（npm `three@0.170.0`），MIT 授權，Copyright © 2010-2024 three.js authors。`OrbitControls.js` 僅把 `import ... from 'three'` 改成相對路徑，其餘未修改。
