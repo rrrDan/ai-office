@@ -927,81 +927,166 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       v.copy(f.anchor).project(camera);
       const vis = v.z < 1 && v.x > -1.15 && v.x < 1.15 && v.y > -1.15 && v.y < 1.15;
       f.el.style.visibility = vis ? 'visible' : 'hidden';
-      if (!vis) continue;
-      if (!f.size || f.dirty) { f.el.classList.remove('squeeze'); f.size = [f.el.offsetWidth, f.el.offsetHeight]; f.dirty = false; }
+      if (!vis) { f._tagDisp = f._tagDispOff = f._tagOff = null; continue; }
+      if (f.dirty) { f.el.classList.remove('squeeze'); f.dirty = false; }
+      f.size = [f.el.offsetWidth, f.el.offsetHeight];
       list.push({ f, z: v.z, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h, band: bandOf(f, w, h) });
     }
-    // 名牌避讓：選取中的先放，其次離鏡頭近的；先用候選格，再每幀做螢幕空間迭代分離，
-    // 並夾在本層垂直範圍與畫面內。真的放不下就縮成只剩圓點＋名字
+    // 名牌避讓：優先沿用上一幀的偏移（沒撞到才換格），再以候選格＋迭代分離算出不重疊的目標，
+    // 畫面位置朝目標每幀最多走約 20px，避免鏡頭阻尼時單幀跳格；重疊以泡泡＋狀態圖示的聯集為準
     list.sort((a, b) => (b.f.key === selected) - (a.f.key === selected) || a.z - b.z);
-    // 右上角狀態小圖示（tag-fx）會超出名牌外框；手機精簡名牌同樣會溢出，比對時上、右各留 PAD
-    const PAD = compactTags ? 8 : 10;
+    const MAX_STEP = 20;
+    const fxPad = (f) => {
+      const tag = f.el.getBoundingClientRect(), bubble = f.el.querySelector('.tag-bubble')?.getBoundingClientRect();
+      const fx = f.el.querySelector('.tag-fx'), fxr = (fx && fx.textContent.trim()) ? fx.getBoundingClientRect() : null;
+      const reserve = { l: 0, t: compactTags ? 8 : 10, r: compactTags ? 8 : 10, b: 0 };
+      let pad;
+      if (!bubble || !tag.width) pad = { ...reserve };
+      else {
+        const u0 = Math.min(bubble.left, fxr ? fxr.left : bubble.left), u1 = Math.max(bubble.right, fxr ? fxr.right : bubble.right);
+        const v0 = Math.min(bubble.top, fxr ? fxr.top : bubble.top), v1 = Math.max(bubble.bottom, fxr ? fxr.bottom : bubble.bottom);
+        pad = { l: Math.max(0, tag.left - u0), t: Math.max(0, tag.top - v0), r: Math.max(0, u1 - tag.right), b: Math.max(0, v1 - tag.bottom) };
+      }
+      // 狀態圖示出現／消失時不要讓碰撞盒忽大忽小，否則阻尼後期會被強制分開而單幀大跳。
+      const hold = f._fxPadMax || reserve;
+      pad = { l: Math.max(pad.l, hold.l, reserve.l), t: Math.max(pad.t, hold.t, reserve.t), r: Math.max(pad.r, hold.r, reserve.r), b: Math.max(pad.b, hold.b, reserve.b) };
+      f._fxPadMax = pad;
+      return pad;
+    };
     const items = [];
+    const makeR = (x0, y1, tw, th) => ({ x0, x1: x0 + tw, y0: y1 - th, y1 });
+    const hitR = (obj, rec) => { const p = obj.pad; return { x0: rec.x0 - p.l, x1: rec.x1 + p.r, y0: rec.y0 - p.t, y1: rec.y1 + p.b }; };
+    const clampYOf = (it, th, bottom) => {
+      const [bTop, bBot] = it.band, minB = bTop + th;
+      return Math.max(minB, Math.min(Math.max(minB, bBot), bottom));
+    };
     for (const it of list) {
-      const [tw, th] = it.f.size;
-      const [bTop, bBot] = it.band;
-      const clampY = (bottom) => Math.max(bTop + th, Math.min(Math.max(bTop + th, bBot), bottom));
-      const sx = tw * 0.55 + 4, sy = th + 4;
-      // 手機改與桌機一樣用較密的候選格，旋轉時每一幀重新找位置
-      const cands = compactTags ? MOBILE_CANDS(sx, sy) : DESK_CANDS(sx, sy);
+      const [tw, th] = it.f.size, pad = fxPad(it.f);
+      const clampX = (x0) => Math.max(4, Math.min(w - tw - 4, x0));
+      const clampY = (bottom) => clampYOf(it, th, bottom);
       let best = null;
-      for (const [dx, dy] of cands) {
-        const x0 = Math.max(4, Math.min(w - tw - 4, it.x - tw / 2 + dx));
-        const y1 = clampY(it.y + dy);
-        const r = { x0, x1: x0 + tw + PAD, y0: y1 - th - PAD, y1 };
-        let ov = 0; for (const p of items) ov += overlapArea(r, p.r);
-        const cost = ov * 200 + Math.abs(x0 + tw / 2 - it.x) + Math.abs(y1 - it.y) * 1.3;
-        if (!best || cost < best.cost) best = { r, cost, ov };
-        if (ov === 0) break;
+      const off = it.f._tagOff;
+      if (off) {
+        const r = makeR(clampX(it.x - tw / 2 + off.dx), clampY(it.y + off.dy), tw, th);
+        let ov = 0; for (const p of items) ov += overlapArea(hitR({ pad }, r), hitR(p, p.r));
+        if (ov === 0) best = { r, cost: 0, ov: 0 };
       }
-      items.push({ it, tw, th, r: best.r, ov: best.ov });
+      if (!best) {
+        const sx = tw * 0.55 + 4, sy = th + 4;
+        const cands = compactTags ? MOBILE_CANDS(sx, sy) : DESK_CANDS(sx, sy);
+        for (const [dx, dy] of cands) {
+          const r = makeR(clampX(it.x - tw / 2 + dx), clampY(it.y + dy), tw, th);
+          let ov = 0; for (const p of items) ov += overlapArea(hitR({ pad }, r), hitR(p, p.r));
+          const cost = ov * 200 + Math.abs(r.x0 + tw / 2 - it.x) + Math.abs(r.y1 - it.y) * 1.3;
+          if (!best || cost < best.cost) best = { r, cost, ov };
+          if (ov === 0) break;
+        }
+      }
+      items.push({ it, tw, th, pad, r: best.r, ov: best.ov });
     }
-    const slackX = (obj, dir) => dir < 0 ? Math.max(0, obj.r.x0 - 4) : Math.max(0, (w - obj.tw - 4) - obj.r.x0);
-    const slackY = (obj, dir) => {
+    const slackX = (obj, rec, dir) => dir < 0 ? Math.max(0, rec.x0 - 4) : Math.max(0, (w - obj.tw - 4) - rec.x0);
+    const slackY = (obj, rec, dir) => {
       const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
-      return dir < 0 ? Math.max(0, obj.r.y1 - minB) : Math.max(0, maxB - obj.r.y1);
+      return dir < 0 ? Math.max(0, rec.y1 - minB) : Math.max(0, maxB - rec.y1);
     };
-    const clampItem = (obj) => {
+    const clampRec = (obj, rec) => {
       const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
-      const x0 = Math.max(4, Math.min(w - obj.tw - 4, obj.r.x0));
-      const y1 = Math.max(minB, Math.min(maxB, obj.r.y1));
-      obj.r = { x0, x1: x0 + obj.tw + PAD, y0: y1 - obj.th - PAD, y1 };
+      rec.x0 = Math.max(4, Math.min(w - obj.tw - 4, rec.x0)); rec.y1 = Math.max(minB, Math.min(maxB, rec.y1));
+      rec.x1 = rec.x0 + obj.tw; rec.y0 = rec.y1 - obj.th;
     };
-    const shift = (obj, dx, dy) => { obj.r.x0 += dx; obj.r.x1 += dx; obj.r.y0 += dy; obj.r.y1 += dy; clampItem(obj); };
-    // 迭代分離：有空間就沿重疊較小的軸推開；若該軸已被樓層／畫面擋住，改推另一軸
-    for (let iter = 0; iter < 32; iter++) {
-      let moved = false;
-      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
-        const A = items[i], B = items[j];
-        const ox = Math.min(A.r.x1, B.r.x1) - Math.max(A.r.x0, B.r.x0);
-        const oy = Math.min(A.r.y1, B.r.y1) - Math.max(A.r.y0, B.r.y0);
-        if (ox <= 0 || oy <= 0) continue;
-        const selA = A.it.f.key === selected, selB = B.it.f.key === selected;
-        const dirX = (A.r.x0 + A.r.x1 <= B.r.x0 + B.r.x1) ? -1 : 1;
-        const dirY = (A.r.y0 + A.r.y1 <= B.r.y0 + B.r.y1) ? -1 : 1;
-        const needX = ox + 0.75, needY = oy + 0.75;
-        const sxA = slackX(A, dirX), sxB = slackX(B, -dirX), slX = sxA + sxB;
-        const syA = slackY(A, dirY), syB = slackY(B, -dirY), slY = syA + syB;
-        const preferX = ox < oy;
-        const useX = (preferX && slX > 0.01) || slY < 0.01;
-        if (useX && slX > 0.01) {
-          const take = Math.min(needX, slX);
-          const wA = selA && !selB ? 0 : (selB && !selA ? 1 : (sxA / slX));
-          shift(A, dirX * take * wA, 0); shift(B, -dirX * take * (1 - wA), 0);
-        } else if (slY > 0.01) {
-          const take = Math.min(needY, slY);
-          const wA = selA && !selB ? 0 : (selB && !selA ? 1 : (syA / slY));
-          shift(A, 0, dirY * take * wA); shift(B, 0, -dirY * take * (1 - wA));
-        } else continue;
-        moved = true;
+    const shiftRec = (obj, rec, dx, dy) => { rec.x0 += dx; rec.x1 += dx; rec.y0 += dy; rec.y1 += dy; clampRec(obj, rec); };
+    const separate = (getR) => {
+      const totalOv = () => {
+        let s = 0;
+        for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++)
+          s += overlapArea(hitR(items[i], getR(items[i])), hitR(items[j], getR(items[j])));
+        return s;
+      };
+      const tryShift = (A, B, ra, rb, dxA, dyA, dxB, dyB) => {
+        const sa = { x0: ra.x0, x1: ra.x1, y0: ra.y0, y1: ra.y1 }, sb = { x0: rb.x0, x1: rb.x1, y0: rb.y0, y1: rb.y1 };
+        shiftRec(A, ra, dxA, dyA); shiftRec(B, rb, dxB, dyB);
+        const ov = totalOv();
+        ra.x0 = sa.x0; ra.x1 = sa.x1; ra.y0 = sa.y0; ra.y1 = sa.y1;
+        rb.x0 = sb.x0; rb.x1 = sb.x1; rb.y0 = sb.y0; rb.y1 = sb.y1;
+        return ov;
+      };
+      for (let iter = 0; iter < 40; iter++) {
+        let moved = false;
+        for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+          const A = items[i], B = items[j], ra = getR(A), rb = getR(B);
+          const ha = hitR(A, ra), hb = hitR(B, rb);
+          const ox = Math.min(ha.x1, hb.x1) - Math.max(ha.x0, hb.x0);
+          const oy = Math.min(ha.y1, hb.y1) - Math.max(ha.y0, hb.y0);
+          if (ox <= 0 || oy <= 0) continue;
+          const selA = A.it.f.key === selected, selB = B.it.f.key === selected;
+          const dirX = (ha.x0 + ha.x1 <= hb.x0 + hb.x1) ? -1 : 1;
+          const dirY = (ha.y0 + ha.y1 <= hb.y0 + hb.y1) ? -1 : 1;
+          const slX = slackX(A, ra, dirX) + slackX(B, rb, -dirX);
+          const slY = slackY(A, ra, dirY) + slackY(B, rb, -dirY);
+          const wX = slX > 0.01 ? (selA && !selB ? 0 : (selB && !selA ? 1 : (slackX(A, ra, dirX) / slX))) : 0;
+          const wY = slY > 0.01 ? (selA && !selB ? 0 : (selB && !selA ? 1 : (slackY(A, ra, dirY) / slY))) : 0;
+          const takeX = slX > 0.01 ? Math.min(ox + 1, slX) : 0;
+          const takeY = slY > 0.01 ? Math.min(oy + 1, slY) : 0;
+          const cur = totalOv();
+          const ovX = takeX ? tryShift(A, B, ra, rb, dirX * takeX * wX, 0, -dirX * takeX * (1 - wX), 0) : cur;
+          const ovY = takeY ? tryShift(A, B, ra, rb, 0, dirY * takeY * wY, 0, -dirY * takeY * (1 - wY)) : cur;
+          // 用整體剩餘重疊選軸（避免這一對往上/下讓開卻撞到第三人）。
+          // 兩軸一樣乾淨時走位移較小的軸，避免只差幾個 px 的 pad 重疊被左右推開上百 px。
+          const useX = takeX && (ovX < ovY || (ovX === ovY && ovX < cur && takeX <= (takeY || Infinity)));
+          const useY = takeY && !useX && ovY < cur;
+          if (useX) shiftRec(A, ra, dirX * takeX * wX, 0), shiftRec(B, rb, -dirX * takeX * (1 - wX), 0);
+          else if (useY) shiftRec(A, ra, 0, dirY * takeY * wY), shiftRec(B, rb, 0, -dirY * takeY * (1 - wY));
+          else continue;
+          moved = true;
+        }
+        if (!moved) break;
       }
-      if (!moved) break;
+    };
+    const hitsOverlap = (getR) => {
+      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++)
+        if (overlapArea(hitR(items[i], getR(items[i])), hitR(items[j], getR(items[j]))) > 0) return true;
+      return false;
+    };
+    separate(o => o.r);
+    // 畫面位置：從上一幀出發，先夾進新的樓層帶，再朝目標最多走 MAX_STEP。
+    // 若這樣會重疊，就縮小步進（二分）；只有夾進樓層後仍重疊時，才強制分開。
+    for (const obj of items) {
+      // 畫面位置跟錨點走（沿用上一幀相對偏移），格位切換再以 MAX_STEP 靠近目標。
+      const prev = obj.it.f._tagDispOff;
+      if (prev) {
+        obj.disp = makeR(obj.it.x - obj.tw / 2 + prev.dx, obj.it.y + prev.dy, obj.tw, obj.th);
+        clampRec(obj, obj.disp);
+      } else {
+        obj.disp = makeR(obj.r.x0, obj.r.y1, obj.tw, obj.th);
+      }
+    }
+    // 夾進樓層帶後若畫面位置已重疊，先分開（目標格已在 obj.r 解完）。
+    // 再朝目標每幀最多走 MAX_STEP；若這一步會重疊就二分縮小步進。
+    if (hitsOverlap(o => o.disp)) separate(o => o.disp);
+    const base = items.map(o => ({ x0: o.disp.x0, y1: o.disp.y1 }));
+    const applyT = (t) => {
+      for (let i = 0; i < items.length; i++) {
+        const obj = items[i], b = base[i];
+        let x0 = b.x0 + (obj.r.x0 - b.x0) * t, y1 = b.y1 + (obj.r.y1 - b.y1) * t;
+        const dist = Math.hypot(x0 - b.x0, y1 - b.y1);
+        if (dist > MAX_STEP && t > 0) { const k = MAX_STEP / dist; x0 = b.x0 + (x0 - b.x0) * k; y1 = b.y1 + (y1 - b.y1) * k; }
+        obj.disp = makeR(x0, y1, obj.tw, obj.th);
+        clampRec(obj, obj.disp);
+      }
+    };
+    applyT(1);
+    if (hitsOverlap(o => o.disp)) {
+      let lo = 0, hi = 1;
+      for (let k = 0; k < 12; k++) { const mid = (lo + hi) / 2; applyT(mid); if (hitsOverlap(o => o.disp)) hi = mid; else lo = mid; }
+      applyT(lo);
     }
     for (const obj of items) {
-      const r = { x0: obj.r.x0, x1: obj.r.x1 - PAD, y0: obj.r.y0 + PAD, y1: obj.r.y1 };
-      const [bTop, bBot] = obj.it.band;
-      let still = 0; for (const o of items) if (o !== obj) still += overlapArea(obj.r, o.r);
+      const r = obj.disp, [bTop, bBot] = obj.it.band;
+      let still = 0; for (const o of items) if (o !== obj) still += overlapArea(hitR(obj, r), hitR(o, o.disp));
       obj.it.f._tagBand = [bTop, bBot]; obj.it.f._tagRect = [r.x0, r.y0, r.x1, r.y1];
+      obj.it.f._tagDisp = { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 };
+      obj.it.f._tagDispOff = { dx: r.x0 + obj.tw / 2 - obj.it.x, dy: r.y1 - obj.it.y };
+      obj.it.f._tagOff = { dx: (obj.r.x0 + obj.tw / 2) - obj.it.x, dy: obj.r.y1 - obj.it.y };
       obj.it.f.el.classList.toggle('squeeze', still > obj.tw * obj.th * 0.12 && !obj.it.f.el.classList.contains('sel'));
       obj.it.f.el.style.transform = `translate3d(${r.x0.toFixed(1)}px, ${r.y0.toFixed(1)}px, 0)`;
       const shifted = Math.abs(r.x0 + obj.tw / 2 - obj.it.x) > 6 || Math.abs(r.y1 - obj.it.y) > 6;
