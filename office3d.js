@@ -74,7 +74,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
   // 沒有顯示卡（軟體算圖，如 SwiftShader / llvmpipe）時降低更新頻率，避免拖慢整個頁面
-  let softGL = false, compactTags = false;
+  let softGL = false, compactTags = false, footLog = null;
   try {
     const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
     const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
@@ -230,16 +230,20 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     plant(W / 2 - 0.75, y, D / 2 - 0.8, 0.8);
   }
   // ===== 左側樓梯（之字形，連接 1F-2F-3F）=====
+  const FLIGHTS = [];   // 每段樓梯的踏階資料，給「腳踩地面」計算踏階頂面高度
   const stairMat = std(0xe9dcc6, { roughness: 0.7 }), stairEdge = std(0x3b3856, { roughness: 0.5 });
   for (let f = 1; f <= 3; f++) {
     const z = stairZ(f), y = floorY(f);
     box(1.3, 0.2, 1.4, stairMat, STAIR_X, y - 0.1, z);
     box(1.34, 0.08, 1.44, stairEdge, STAIR_X, y - 0.22, z);
+    // 樓板邊緣（x=-6）到樓梯平台（x=-6.3）之間原本有 0.3 的空隙，補一塊門檻板讓腳有地方踩
+    box(0.36, 0.08, 1.4, slabEdgeMat, -W / 2 - 0.15, y - 0.04, z);
     if (f > 1) { box(0.14, y, 0.14, pillarMat, STAIR_X - 0.6, y / 2 - 0.2, z + (z > 0 ? 0.6 : -0.6)); }
     box(0.05, 0.9, 1.4, stairEdge, STAIR_X - 0.64, y + 0.45, z);
     if (f < 3) {
       const z2 = stairZ(f + 1), dir = Math.sign(z2 - z), y2 = floorY(f + 1);
       const zs = z + dir * 0.7, ze = z2 - dir * 0.7, N = 16;
+      FLIGHTS.push({ y, y2, zs, ze, N });
       for (let i = 0; i < N; i++) {
         const u = (i + 0.5) / N;
         box(1.1, 0.12, Math.abs(ze - zs) / N + 0.02, stairMat, STAIR_X, y + (y2 - y) * ((i + 1) / N) - 0.06, zs + (ze - zs) * u);
@@ -436,9 +440,73 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       let diff = ((w.rot - f.walker.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
       f.walker.rotation.y += diff * 0.3;
     }
-    f.walker.position.y += Math.abs(Math.sin(k * Math.PI * 7)) * 0.06 + Math.sin(k * Math.PI) * 0.12; // 站起來＋腳步起伏
+    f.walker.position.y = groundAt(f.walker.position.x, f.walker.position.z, f.walker.position.y); // 腳踩地面（不再整個人浮起來）
     if (k >= 1) { f.walk = null; f.walker.position.copy(w.pts[w.pts.length - 1]); f.walker.rotation.y = w.rot; }
     return k;
+  }
+
+  // ===== 腳踩地面：算出某個位置的「地面頂面高度」=====
+  // 電梯車廂內 → 車廂地板頂面；樓梯段上 → 該踏階頂面；其他 → 最近樓層的樓板頂面（floorY）
+  const CAB_FLOOR = 0.04;   // 車廂地板（厚 0.08、中心在車廂原點）的頂面
+  function groundAt(x, z, nearY) {
+    if (Math.abs(x - ELEV_X) < 0.7 && Math.abs(z) < 0.7 && Math.abs(nearY - elev.y) < 1.2) return elev.y + CAB_FLOOR;
+    if (Math.abs(x - STAIR_X) < 0.56) {
+      for (const fl of FLIGHTS) {
+        if (nearY < fl.y - 0.05 || nearY > fl.y2 + 0.05) continue;
+        // 每階踏板前後各多出 0.01（建模時的重疊），邊界上取較高那一階
+        const run = Math.abs(fl.ze - fl.zs), ov = 0.01 / run;
+        const u = (z - fl.zs) / (fl.ze - fl.zs);
+        if (u < -ov || u > 1 + ov) continue;
+        const i = Math.max(0, Math.min(fl.N - 1, Math.floor((u + ov) * fl.N)));
+        return fl.y + (fl.y2 - fl.y) * (i + 1) / fl.N;
+      }
+    }
+    const f = Math.max(1, Math.min(3, Math.round((nearY - floorY(1)) / FLOOR_H) + 1));
+    return floorY(f);
+  }
+  // 每格：先把腳擺好（走路擺動），把兩隻腳的每個頂點換到世界座標，查每個頂點正下方的地面高度，
+  // 再把整個角色上下移到「沒有任何頂點低於它下面的地面，且至少有一個頂點剛好貼地」
+  const vtx = new THREE.Vector3();
+  function footVerts(ft, cb) {
+    const pos = ft.geometry.attributes.position;
+    for (let i = 0; i < pos.count; i++) { vtx.fromBufferAttribute(pos, i).applyMatrix4(ft.matrixWorld); cb(vtx); }
+  }
+  function plantFeet(f) {
+    f.slot.position.y = 0; f.walker.updateMatrixWorld(true);
+    let need = -Infinity; const ny = f.walker.position.y;
+    for (const ft of f.av.feet) footVerts(ft, (v) => { need = Math.max(need, groundAt(v.x, v.z, ny) - v.y); });
+    f.slot.position.y = need; f.slot.updateMatrixWorld(true);
+  }
+  // 唯讀檢查用：每隻腳的每個頂點，量「頂點高度 − 正下方實際地板幾何表面」（射線），取最小值
+  const probeRay = new THREE.Raycaster(); const DOWN = new THREE.Vector3(0, -1, 0), rayO = new THREE.Vector3();
+  let floorMeshes = null, staticMeshes = null;
+  function footProbe(k) {
+    const f = figures.get(k); if (!f || !f.av || !f.av.feet) return null;
+    if (!floorMeshes) {
+      const skip = new Set(); for (const g of figures.values()) g.walker.traverse(o => skip.add(o));
+      staticMeshes = []; scene.traverse(o => { if (o.isMesh && !skip.has(o) && o.visible && !(o.material && (o.material.transparent || o.material.visible === false))) staticMeshes.push(o); });
+      const floorMats = new Set([slabMat, slabEdgeMat, stairMat, cabFrame]);
+      floorMeshes = staticMeshes.filter(o => floorMats.has(o.material));
+    }
+    f.walker.updateMatrixWorld(true);
+    const ny = f.walker.position.y, out = [];
+    for (const ft of f.av.feet) {
+      let gap = Infinity, gapGround = Infinity, gapAny = Infinity, sole = Infinity, cx = 0, cz = 0, n = 0;
+      const pos = ft.geometry.attributes.position; let minLocal = Infinity;
+      for (let i = 0; i < pos.count; i++) minLocal = Math.min(minLocal, pos.getY(i));
+      let vi = 0;
+      footVerts(ft, (v) => {
+        if (pos.getY(vi++) > minLocal + 1e-4) return;   // 只量腳底那一面的頂點
+        sole = Math.min(sole, v.y); cx += v.x; cz += v.z; n++;
+        gapGround = Math.min(gapGround, v.y - groundAt(v.x, v.z, ny));
+        // 射線起點在頂點上方 0.15（樓梯上下兩段在同一直線，避免打到頭頂上的下一段踏階）
+        probeRay.set(rayO.set(v.x, v.y + 0.15, v.z), DOWN); probeRay.far = 1.5;
+        const h = probeRay.intersectObjects(floorMeshes, false)[0]; if (h) gap = Math.min(gap, v.y - h.point.y);
+        const h2 = probeRay.intersectObjects(staticMeshes, false)[0]; if (h2) gapAny = Math.min(gapAny, v.y - h2.point.y);
+      });
+      out.push({ sole: +sole.toFixed(4), gap: isFinite(gap) ? +gap.toFixed(4) : null, gapGround: +gapGround.toFixed(4), gapAny: isFinite(gapAny) ? +gapAny.toFixed(4) : null, x: +(cx / n).toFixed(2), z: +(cz / n).toFixed(2) });
+    }
+    return { feet: out, legsVisible: f.av.legs.visible, walking: !!f.walk || f.moving, busy: f.busy, inCab: Math.abs(f.walker.position.x - ELEV_X) < 0.7 && Math.abs(f.walker.position.z) < 0.7 };
   }
 
   // ===== 送資料動畫：走樓梯或搭電梯到對方座位，交付後回座 =====
@@ -462,10 +530,10 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       while (i < lens.length - 1 && rem > lens[i]) { rem -= lens[i]; i++; }
       const a = pts[i], b = pts[i + 1], u = lens[i] ? Math.min(1, rem / lens[i]) : 1;
       f.walker.position.lerpVectors(a, b, u);
-      f.walker.position.y += 0.1 + Math.abs(Math.sin(d * 4.2)) * 0.05;
+      f.walker.position.y = groundAt(f.walker.position.x, f.walker.position.z, f.walker.position.y);
       const dx = b.x - a.x, dz = b.z - a.z;
       if (Math.hypot(dx, dz) > 0.05) { const tr = Math.atan2(dx, dz); const df = ((tr - f.walker.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; f.walker.rotation.y += df * 0.25; }
-      if (d >= total) { f.walker.position.copy(pts[pts.length - 1]); f.walker.position.y += 0.1; f.moving = false; return true; }
+      if (d >= total) { f.walker.position.copy(pts[pts.length - 1]); f.walker.position.y = groundAt(f.walker.position.x, f.walker.position.z, f.walker.position.y); f.moving = false; return true; }
       return false;
     });
   }
@@ -771,6 +839,19 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       if (f.carry) { la = ra = ay + 0.1; }
       if (av.armL) av.armL.position.y = la;
       if (av.armR) av.armR.position.y = ra;
+      // 站著／走路時顯示腳並貼齊地面；坐著時收起腳、維持原本坐姿
+      // 還在座位（沙發／椅子）範圍內時維持坐姿，離開座位才放下腳
+      const inSeat = f.walker.position.distanceTo(f.loungeSeat.pos) < 0.5 || f.walker.position.distanceTo(f.deskSeat.pos) < 0.5;
+      const standing = (walking || f.busy) && !inSeat;
+      if (av.legs) {
+        av.legs.visible = standing;
+        if (av.seatFeet) for (const sf of av.seatFeet) sf.visible = !standing;
+        if (standing) {
+          const sw = walking ? Math.sin(t * 9 + f.phase) * 0.5 : av.legL.rotation.x * 0.8;
+          av.legL.rotation.x = sw; av.legR.rotation.x = -sw;
+          plantFeet(f);
+        } else if (f.slot.position.y !== 0) { f.slot.position.y = 0; av.legL.rotation.x = av.legR.rotation.x = 0; }
+      }
       if (av.spin) av.spin.rotation.y = t * 0.8;
       if (av.tail) av.tail.rotation.y = Math.sin(p * 1.8) * 0.35;
       const r = f.status === 'error' ? 0.45 + 0.55 * Math.abs(Math.sin(t * 3.5)) : (f.status === 'working' ? 0.65 + 0.3 * Math.sin(t * 2.6 + f.phase) : 0.7);
@@ -781,6 +862,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     controls.update();
     renderer.render(scene, camera);
     placeTags();
+    if (footLog) for (const k of footLog.keys) { const pr = footProbe(k); if (pr && pr.legsVisible) { const w = where(k); footLog.samples.push({ k, floor: w.floor, ...pr }); } }
   }
   function start() { if (running || document.hidden || !onScreen) return; running = true; frame(); }
   function stop() { running = false; cancelAnimationFrame(raf); }
@@ -800,7 +882,9 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     const spot = (f.walk || f.moving || f.carry !== null) ? 'walking' : (f.atDesk ? 'desk' : 'lounge');
     return { floor: fl, spot, x: +f.walker.position.x.toFixed(2), z: +f.walker.position.z.toFixed(2) };
   }
-  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where };
+  // 唯讀檢查用：在每次實際畫面輸出時記錄腳底資料
+  function footLogCtl(keys) { const prev = footLog; footLog = keys ? { keys, samples: [] } : null; return prev ? prev.samples : null; }
+  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where, footProbe, footLog: footLogCtl };
 }
 
 export function webglAvailable() {

@@ -89,8 +89,9 @@ function buildMark(shape) {
   const nub = memo('nub', () => new THREE.SphereGeometry(0.075, 10, 8));
   const armL = mesh(nub, tintMat, root, -0.36, 1.0, 0.12);
   const armR = mesh(nub, tintMat, root, 0.36, 1.0, 0.12);
-  for (const s of [-1, 1]) { const f = mesh(nub, tintMat, root, s * 0.14, 0.66, 0.16); f.scale.set(1.1, 0.7, 1.3); }
-  return { root, head, body, armL, armR, headY: 1.16, armY: 1.0, tint: [tintMat], spin: null, glossy: true };
+  const seatFeet = [];
+  for (const s of [-1, 1]) { const f = mesh(nub, tintMat, root, s * 0.14, 0.66, 0.16); f.scale.set(1.1, 0.7, 1.3); seatFeet.push(f); }
+  return { root, head, body, armL, armR, headY: 1.16, armY: 1.0, tint: [tintMat], spin: null, glossy: true, seatFeet };
 }
 
 // ===== 2. 上班族 =====
@@ -213,13 +214,46 @@ function buildAstro() {
   return { root, head, body, armL, armR, headY: 1.44, armY: 0.92, tint: [c, light.material], spin: null };
 }
 
+// ===== 走路用的腳：坐著時隱藏，站著／走路時顯示；腳底高度由 office3d 每格量測後貼齊地面 =====
+const trouserMat = std(0x2f3446, { roughness: 0.7 });
+const shoeMat = std(0x1d1b26, { roughness: 0.45 });
+const bootMat = std(0x8d93a8, { roughness: 0.5 });
+const LEGS = {
+  // len：髖到腳踝；r：腿粗；foot：[寬, 高, 長]；sx：左右間距
+  office: { len: 0.36, r: 0.07, foot: [0.13, 0.07, 0.22], sx: 0.11 },
+  robot:  { len: 0.24, r: 0.055, foot: [0.15, 0.08, 0.2], sx: 0.13 },
+  cat:    { len: 0.26, r: 0.065, foot: [0.13, 0.07, 0.17], sx: 0.11 },
+  astro:  { len: 0.3, r: 0.08, foot: [0.16, 0.09, 0.22], sx: 0.12 },
+  mark:   { len: 0.16, r: 0.06, foot: [0.14, 0.08, 0.18], sx: 0.12 },
+};
+function addLegs(av, setId) {
+  const cfg = LEGS[setId] || LEGS.mark;
+  const c = av.tint[0];
+  const legMat = setId === 'office' ? trouserMat : setId === 'robot' ? shared.metal : setId === 'astro' ? av.body.material : c;
+  const footMat = setId === 'office' ? shoeMat : setId === 'cat' ? shared.white : setId === 'astro' ? bootMat : c;
+  av.root.updateMatrixWorld(true);
+  const hip = new THREE.Box3().setFromObject(av.body, true).min.y + 0.06;
+  const legs = new THREE.Group(); legs.visible = false; av.root.add(legs);
+  const legG = memo('leg:' + setId, () => new THREE.CapsuleGeometry(cfg.r, Math.max(0.01, cfg.len - cfg.r), 3, 8));
+  const footG = memo('foot:' + setId, () => new THREE.BoxGeometry(cfg.foot[0], cfg.foot[1], cfg.foot[2]));
+  const pivots = [], feet = [];
+  for (const sx of [-1, 1]) {
+    const pv = new THREE.Group(); pv.position.set(sx * cfg.sx, hip, 0); legs.add(pv);
+    mesh(legG, legMat, pv, 0, -cfg.len / 2, 0);
+    const ft = mesh(footG, footMat, pv, 0, -cfg.len - cfg.foot[1] / 2 + 0.02, 0.04);
+    pivots.push(pv); feet.push(ft);
+  }
+  av.legs = legs; av.legL = pivots[0]; av.legR = pivots[1]; av.feet = feet;
+  return av;
+}
+
 export function buildAvatar(setId, shape) {
   switch (setId) {
-    case 'office': return buildOffice();
-    case 'robot': return buildRobot();
-    case 'cat': return buildCat();
-    case 'astro': return buildAstro();
-    default: return buildMark(shape);
+    case 'office': return addLegs(buildOffice(), 'office');
+    case 'robot': return addLegs(buildRobot(), 'robot');
+    case 'cat': return addLegs(buildCat(), 'cat');
+    case 'astro': return addLegs(buildAstro(), 'astro');
+    default: return addLegs(buildMark(shape), 'mark');
   }
 }
 export const usesShape = (setId) => setId === 'mark' || !AVATAR_SETS.some(s => s.id === setId);
@@ -236,7 +270,7 @@ export function tintAvatar(av, hex) {
   });
 }
 
-const KEEP = new Set([hairMat, tieMat, badgeMat, stripeMat, whiskerMat, catEyeMat]);
+const KEEP = new Set([hairMat, tieMat, badgeMat, stripeMat, whiskerMat, catEyeMat, trouserMat, shoeMat, bootMat]);
 export function disposeAvatar(av) {
   av.root.traverse(o => { if (o.material && !Object.values(shared).includes(o.material) && !KEEP.has(o.material) && !av.tint.includes(o.material)) o.material.dispose?.(); });
   av.tint.forEach(m => m.dispose?.());
