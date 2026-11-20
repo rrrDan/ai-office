@@ -170,13 +170,42 @@ function boot() {
     if (!to && status === 'done' && /(交付|交件|已交|回報)/.test(step) && key !== 'nori') to = 'nori';
     return to;
   }
-  const deliveryLog = [];
-  window.__aiOfficeDeliveries = () => deliveryLog.slice();
+  // ---- 送件排隊（每位寄件人各一條）----
+  // 同一位正在送件時，新的送件先排隊，送完一趟再送下一趟。每位最多排 3 件（不含正在送的那件）；
+  // 排滿後又來新的：丟掉「排最久的那一件」（最舊的），保留最新的，讓畫面反映最新的訊息。
+  const QUEUE_MAX = 3;
+  const deliveryLog = [];          // 每件：{ id, src, from, to, mode, step?, t, state, startedAt?, endedAt?, droppedAt? }
+  const queues = new Map();        // 寄件人 → { active: 件 | null, waiting: [件…] }
+  let deliveryId = 0;
+  const qOf = (k) => { if (!queues.has(k)) queues.set(k, { active: null, waiting: [] }); return queues.get(k); };
+  const copy = (it) => it && { ...it };
+  window.__aiOfficeDeliveries = () => deliveryLog.map(copy);   // 唯讀：每次給一份複本
+  window.__aiOfficeDeliveries.queues = () => { const o = {}; for (const [k, q] of queues) o[k] = { active: copy(q.active), waiting: q.waiting.map(copy) }; return o; };
+  window.__aiOfficeDeliveries.max = QUEUE_MAX;
   window.__aiOfficeInfer = (bot, status, step) => { const k = resolveBot(bot); return k ? inferTarget(k, normStatus(status), String(step)) : null; };
+  function enqueueDelivery(item) {
+    item.id = ++deliveryId; item.t = Date.now(); deliveryLog.push(item);
+    if (deliveryLog.length > 200) deliveryLog.splice(0, deliveryLog.length - 200);
+    const q = qOf(item.from);
+    item.done = new Promise((res) => { item._res = res; });
+    Object.defineProperty(item, 'done', { enumerable: false }); Object.defineProperty(item, '_res', { enumerable: false });
+    if (q.active) {
+      item.state = 'queued'; q.waiting.push(item);
+      while (q.waiting.length > QUEUE_MAX) { const old = q.waiting.shift(); old.state = 'dropped'; old.droppedAt = Date.now(); old._res(false); }
+    } else runDelivery(q, item);
+    return item.done;
+  }
+  async function runDelivery(q, item) {
+    q.active = item; item.state = 'delivering'; item.startedAt = Date.now();
+    let ok = false;
+    try { ok = await office.deliver(item.from, item.to, item.mode); } catch (e) { ok = false; }
+    item.state = ok === false ? 'skipped' : 'done'; item.endedAt = Date.now(); q.active = null; item._res(ok !== false);
+    const next = q.waiting.shift(); if (next) runDelivery(q, next);
+  }
   function inferDelivery(key, status, step) {
     if (!office) return;
     const to = inferTarget(key, status, step);
-    if (to) { deliveryLog.push({ src: 'feed', from: key, to, step: String(step).slice(0, 120), t: Date.now() }); office.deliver(key, to, 'auto'); }
+    if (to) enqueueDelivery({ src: 'feed', from: key, to, mode: 'auto', step: String(step).slice(0, 120) });
   }
   $('demoBtn').addEventListener('click', async () => {
     if (!office) return;
@@ -188,10 +217,9 @@ function boot() {
     const mode = same ? 'auto' : (Math.random() < 0.5 ? 'stairs' : 'elevator');
     const meta = (k) => BOTS.find(b => b.key === k).short;
     $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${same ? '同樓層' : mode === 'stairs' ? '走樓梯' : '搭電梯'}）`;
-    deliveryLog.push({ src: 'demo', from, to, t: Date.now() });
     setDrawer('peek');
     $('demoBtn').disabled = true;
-    try { await office.deliver(from, to, mode); } finally { $('demoBtn').disabled = false; }
+    try { await enqueueDelivery({ src: 'demo', from, to, mode }); } finally { $('demoBtn').disabled = false; }
   });
 
   // ---- 3D ----
@@ -199,7 +227,7 @@ function boot() {
     const { createOffice, webglAvailable } = await import('./office3d.js');
     if (!webglAvailable()) throw new Error('no webgl');
     office = createOffice($('viewport'), $('overlay'), { onSelect: (k) => selectBot(k, true), avatarSet });
-    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m); window.__aiOfficeWhere = (k) => office.where(k); window.__aiOfficeFeet = (k) => office.footProbe(k); window.__aiOfficeFootLog = (keys) => office.footLog(keys);
+    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m); window.__aiOfficeEnqueue = (a, b, m) => enqueueDelivery({ src: 'test', from: a, to: b, mode: m || 'auto' }); window.__aiOfficeWhere = (k) => office.where(k); window.__aiOfficeFeet = (k) => office.footProbe(k); window.__aiOfficeFootLog = (keys, o) => office.footLog(keys, o); window.__aiOfficeBody = (k) => office.bodyProbe(k); window.__aiOfficeTagBands = () => office.tagBands(); window.__aiOfficePathCheck = () => office.pathCheck();
     office.update(state);
   }
   function syncHeader() {
