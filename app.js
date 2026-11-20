@@ -103,9 +103,9 @@ function boot() {
   const SET_KEY = 'ai-office:avatar-set';
   const SETS = [
     ['mark', '標記吉祥物', '用各 bot 的標記形狀做成的圓潤小精靈'],
-    ['office', '上班族', '坐在辦公桌前的低多邊形小人'],
+    ['office', '上班族', '深色頭髮、白襯衫打紅領帶，外套是 bot 的顏色'],
     ['robot', '圓圓機器人', '圓滾滾的機器人，面罩會發光'],
-    ['cat', '貓咪同事', '有耳朵和尾巴的貓咪'],
+    ['cat', '貓咪同事', '尖耳朵、白鬍鬚、綠眼睛，還有翹尾巴'],
     ['astro', 'Q 版太空人', '戴頭盔、背背包的太空人'],
   ];
   let avatarSet = localStorage.getItem(SET_KEY);
