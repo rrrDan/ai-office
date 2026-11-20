@@ -13,6 +13,7 @@
   - 「狀態」分頁有「示範：送資料」按鈕；瀏覽器主控台也可呼叫 `__aiOfficeDeliver('goya', 'nori', 'stairs')`（第三個參數：`stairs`、`elevator` 或 `auto`）。
 - **5 套角色外型**（「外型」分頁切換，記在這台裝置）：標記吉祥物（預設，用 looks 的 shape 做成圓潤的角色本體）、上班族、圓圓機器人、貓咪同事、Q 版太空人。顏色一律跟著 looks 的 color。
 - **白天／夜晚**：預設依台北時間自動切換（06:00–18:00 為白天），頁首按鈕可切換「自動／白天／夜晚」並記在這台裝置；網址也可加 `?theme=day` 或 `?theme=night`（放在 `#` 前面）。
+- **背景音樂**：右下角喇叭按鈕可開／關，選擇記在這台裝置（localStorage `ai-office:music`）。預設為「開」，但瀏覽器（特別是 iOS）不允許自動播放，所以會在你第一次點擊或觸控頁面時才開始；關掉之後不會自動開始。音量很小，白天較明亮、稍快，夜晚較柔和、較暗，跟著白天／夜晚自動平順切換；分頁切到背景時會淡出暫停。
 
 ## 使用方式
 
@@ -53,11 +54,14 @@ https://rrrdan.github.io/ai-office/#<頻道代號>
 - `app.js`：讀取 FEED、抽屜與清單畫面
 - `feed.js`：訊息解析與狀態管理（純邏輯，可在 Node 測試）
 - `office3d.js`：3D 大樓、家具、樓梯、電梯、休息區、白天夜晚與送資料動畫（全部用程式產生的低多邊形幾何與畫布貼圖，沒有使用外部模型或圖片）
+- `music.js`：背景音樂（Web Audio API 即時合成，沒有任何音訊檔）
 - `avatars.js`：5 套角色外型（程序化幾何，未使用任何官方標誌檔或商標素材）
 - `vendor/three/`：three.js r170（npm `three@0.170.0`）的 `three.module.min.js` 與 `OrbitControls.js`，MIT 授權，見 `vendor/three/LICENSE`
 
 ## 授權
 
 本專案程式碼為從頭獨立撰寫，採 MIT 授權（見 `LICENSE`）。
+
+**背景音樂**：完全由本專案自己的程式碼（`music.js`）在瀏覽器裡用 Web Audio API 即時程序化產生（振盪器、濾波器、雜訊），沒有使用任何音訊檔、取樣或他人的音樂作品，與其他程式碼一樣採本 repo 的 MIT 授權。
 
 第三方元件：three.js r170（npm `three@0.170.0`），MIT 授權，Copyright © 2010-2024 three.js authors。`OrbitControls.js` 僅把 `import ... from 'three'` 改成相對路徑，其餘未修改。

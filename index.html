@@ -42,6 +42,7 @@
     <div class="viewport" id="viewport"></div>
     <div class="overlay" id="overlay"></div>
     <div class="stage-tools">
+      <button type="button" id="musicBtn" class="glassbtn musicbtn" data-state="pending" aria-pressed="true" aria-label="背景音樂：開／關" title="背景音樂：開／關"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path class="spk" d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z"/><path class="wv" d="M15.2 9.2a4 4 0 0 1 0 5.6M17.8 6.8a7.4 7.4 0 0 1 0 10.4"/><path class="x" d="M15.5 9.5l5 5M20.5 9.5l-5 5"/></svg></button>
       <button type="button" id="resetView" class="glassbtn" aria-label="重設視角">⟲ 重設視角</button>
     </div>
     <p class="hint" id="hint">拖曳旋轉・雙指縮放・點名牌看詳情</p>
@@ -85,5 +86,6 @@
   </aside>
 </main>
 <script type="module" src="app.js"></script>
+<script type="module" src="music.js"></script>
 </body>
 </html>
