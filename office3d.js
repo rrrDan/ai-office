@@ -1,7 +1,7 @@
 // AI 辦公室：3D 大樓（three.js r170；模型與貼圖皆為本專案自製的程序化幾何與畫布貼圖）
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
-import { BOTS, STATUS, botMeta, lookColor } from './feed.js';
+import { BOTS, STATUS, botMeta, lookColor, viewStatus } from './feed.js';
 import { buildAvatar, tintAvatar, disposeAvatar, usesShape, DEFAULT_SET } from './avatars.js';
 
 const FLOOR_H = 5.0, WALL_H = 2.5, W = 12, D = 8, SLAB = 0.26;  // 樓層錯開堆疊（像剖面模型），從斜上方可看進每一層
@@ -29,6 +29,7 @@ const PAL = {
 };
 
 const floorY = (f) => (f - 1) * FLOOR_H;
+const FLOOR_COLOR = { 3: '#ffcf6e', 2: '#5fd4c0', 1: '#7cb6ff', 0: '#c3a6ff' };
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.72, metalness: 0.02, flatShading: true, ...extra });
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
@@ -72,6 +73,15 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.toneMapping = THREE.ACESFilmicToneMapping; renderer.toneMappingExposure = 1.05;
   renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+  // 沒有顯示卡（軟體算圖，如 SwiftShader / llvmpipe）時降低更新頻率，避免拖慢整個頁面
+  let softGL = false, compactTags = false;
+  try {
+    const gl = renderer.getContext(), ext = gl.getExtension('WEBGL_debug_renderer_info');
+    const name = ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER);
+    softGL = /swiftshader|llvmpipe|software|basic render/i.test(String(name));
+  } catch { /* 取不到就當一般顯示卡 */ }
+  const FRAME_MIN_MS = softGL ? 80 : 0;
+  let lastDraw = 0;
   container.appendChild(renderer.domElement);
 
   const scene = new THREE.Scene();
@@ -354,6 +364,9 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     row.append(dot, nm, st);
     const step = document.createElement('span'); step.className = 'tag-step';
     bubble.append(row, step, fx);
+    const fl = document.createElement('span'); fl.className = 'tag-floor'; fl.textContent = floor ? floor + 'F' : '';
+    row.prepend(fl);
+    el.style.setProperty('--floor', FLOOR_COLOR[floor] || FLOOR_COLOR[0]); el.dataset.floor = String(floor);
     const tail = document.createElement('span'); tail.className = 'tag-tail';
     el.append(bubble, tail);
     el.addEventListener('click', (ev) => { ev.stopPropagation(); onSelect && onSelect(key); });
@@ -560,9 +573,10 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
         fig.avSet = currentSet; fig.shape = shape; fig.color = null;
       }
       if (fig.color !== hex) { tintAvatar(fig.av, hex); fig.color = hex; }
-      const s = state.bots[key];
-      const status = s ? s.status : 'unknown';
+      const v = viewStatus(state, key), s = v.s;
+      const status = v.status;
       const sc = STATUS[status];
+      fig.el.classList.toggle('stale', v.stale);
       if (status !== fig.status) { setFx(fig, status); fig.status = status; }
       const wantDesk = status === 'working';
       fig.want = wantDesk;
@@ -573,8 +587,8 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       fig.dot.style.background = hex;
       fig.nm.textContent = meta.short;
       fig.st.textContent = sc.label;
-      fig.st.style.background = sc.color;
-      fig.step.textContent = s && s.step ? s.step : '尚無狀態訊息';
+      fig.st.style.background = sc.color; fig.el.style.setProperty('--stc', sc.color);
+      fig.step.textContent = s && s.step ? s.step : (s ? '' : '這台裝置沒有更早的紀錄');
       fig.el.dataset.status = status; fig.dirty = true;
       fig.el.setAttribute('aria-label', `${meta.name}：${sc.label}${s && s.step ? '，' + s.step : ''}`);
     }
@@ -630,6 +644,8 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = w + 'px'; renderer.domElement.style.height = h + 'px';
     camera.aspect = w / h; camera.updateProjectionMatrix();
+    const compact = w < 600; compactTags = compact;
+    if (overlay.classList.contains('compact') !== compact) { overlay.classList.toggle('compact', compact); for (const f of figures.values()) f.dirty = true; }
   }
   let framed = false;
   function intro() {
@@ -639,8 +655,22 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     flyTo(v, 1600);
   }
 
-  // 名牌投影
-  const v = new THREE.Vector3();
+  // 名牌投影：每個名牌只能待在自己那層樓的垂直範圍內（不會跑到別層）
+  const v = new THREE.Vector3(), vb = new THREE.Vector3();
+  function bandOf(f, w, h) {
+    // 人物目前所在樓層（走樓梯/電梯途中以最接近的樓層計）
+    const fl = Math.max(0, Math.min(2, Math.round((f.walker.position.y - floorY(1)) / FLOOR_H)));
+    const base = fl * FLOOR_H + floorY(1);
+    // 上界：上一層樓板的前緣（最上層則是牆頂上方一點）；下界：本層地板前緣
+    if (fl < 2) vb.set(f.walker.position.x, base + FLOOR_H - SLAB - 0.1, D / 2);
+    else vb.set(f.walker.position.x, base + WALL_H + (compactTags ? 0.6 : 1.3), f.walker.position.z);
+    vb.project(camera);
+    const top = (-vb.y * 0.5 + 0.5) * h;
+    vb.set(f.walker.position.x, base + 0.15, D / 2).project(camera);
+    const bot = (-vb.y * 0.5 + 0.5) * h;
+    return [top, bot];
+  }
+  const overlapArea = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
   function placeTags() {
     const w = container.clientWidth, h = container.clientHeight;
     const list = [];
@@ -649,25 +679,35 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       const vis = v.z < 1 && v.x > -1.15 && v.x < 1.15 && v.y > -1.15 && v.y < 1.15;
       f.el.style.visibility = vis ? 'visible' : 'hidden';
       if (!vis) continue;
-      if (!f.size || f.dirty) { f.size = [f.el.offsetWidth, f.el.offsetHeight]; f.dirty = false; }
-      list.push({ f, z: v.z, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h });
+      if (!f.size || f.dirty) { f.el.classList.remove('squeeze'); f.size = [f.el.offsetWidth, f.el.offsetHeight]; f.dirty = false; }
+      list.push({ f, z: v.z, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h, band: bandOf(f, w, h) });
     }
-    // 名牌避讓：離鏡頭近的先放，後面的若重疊就往上推
-    list.sort((a, b) => a.z - b.z);
+    // 名牌避讓：選取中的先放，其次離鏡頭近的；重疊時優先往左右挪，
+    // 再在本層範圍內上下挪；真的放不下就縮成只剩圓點＋名字
+    list.sort((a, b) => (b.f.key === selected) - (a.f.key === selected) || a.z - b.z);
     const placed = [];
     for (const it of list) {
       const [tw, th] = it.f.size;
-      let x0 = Math.max(6, Math.min(w - tw - 6, it.x - tw / 2)), y1 = it.y, lift = 0;
-      for (let pass = 0; pass < 6; pass++) {
-        const hit = placed.find(r => x0 < r.x1 - 2 && x0 + tw > r.x0 + 2 && (y1 - lift) - th < r.y1 - 2 && (y1 - lift) > r.y0 + 2);
-        if (!hit) break;
-        lift = y1 - hit.y0 + 12;
+      const [bTop, bBot] = it.band;
+      const clampY = (bottom) => Math.max(bTop + th, Math.min(Math.max(bTop + th, bBot), bottom));
+      const sx = tw * 0.55 + 4, sy = th + 4;
+      const cands = [[0, 0], [-sx, 0], [sx, 0], [0, -sy], [-sx, -sy], [sx, -sy], [0, sy], [-sx, sy], [sx, sy], [-2 * sx, 0], [2 * sx, 0], [0, 2 * sy], [-sx, 2 * sy], [sx, 2 * sy], [-2 * sx, sy], [2 * sx, sy]];
+      let best = null;
+      for (const [dx, dy] of cands) {
+        const x0 = Math.max(4, Math.min(w - tw - 4, it.x - tw / 2 + dx));
+        const y1 = clampY(it.y + dy);
+        const r = { x0, x1: x0 + tw, y0: y1 - th, y1 };
+        let ov = 0; for (const p of placed) ov += overlapArea(r, p);
+        const cost = ov * 200 + Math.abs(x0 + tw / 2 - it.x) + Math.abs(y1 - it.y) * 1.3;
+        if (!best || cost < best.cost) best = { r, cost, ov };
+        if (ov === 0 && dx === 0 && dy === 0) break;
       }
-      const top = y1 - lift;
-      placed.push({ x0, x1: x0 + tw, y0: top - th, y1: top });
-      it.f.el.style.transform = `translate3d(${x0.toFixed(1)}px, ${(top - th).toFixed(1)}px, 0)`;
-      it.f.el.classList.toggle('lifted', lift > 0);
-      if (lift > 0) it.f.el.style.setProperty('--lift', lift.toFixed(0) + 'px');
+      const r = best.r;
+      it.f.el.classList.toggle('squeeze', best.ov > tw * th * 0.12 && !it.f.el.classList.contains('sel'));
+      placed.push(r);
+      it.f.el.style.transform = `translate3d(${r.x0.toFixed(1)}px, ${r.y0.toFixed(1)}px, 0)`;
+      const shifted = Math.abs(r.x0 + tw / 2 - it.x) > 6 || Math.abs(r.y1 - it.y) > 6;
+      it.f.el.classList.toggle('shifted', shifted);
     }
     list.forEach((it, i) => { it.f.el.style.zIndex = String(it.f.key === selected ? 999 : 100 - i); });
   }
@@ -676,6 +716,9 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   function frame() {
     if (!running) return;
     raf = requestAnimationFrame(frame);
+    const nowT = performance.now();
+    if (FRAME_MIN_MS && nowT - lastDraw < FRAME_MIN_MS) return;
+    lastDraw = nowT;
     const t = clock.getElapsedTime();
     if (fly) {
       const k = Math.min(1, (performance.now() - fly.t0) / fly.ms), e = easeOut(k);
@@ -689,7 +732,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       const av = f.av; if (!av) continue;
       if (f.walk) stepWalk(f, performance.now());
       const walking = !!f.walk || f.moving;
-      f.anchor.set(f.walker.position.x, f.walker.position.y + 2.05 + (f.walker.position.z < -0.6 ? 0.25 : 0), f.walker.position.z + 0.02);
+      f.anchor.set(f.walker.position.x, f.walker.position.y + (compactTags ? 1.8 : 2.05 + (f.walker.position.z < -0.6 ? 0.25 : 0)), f.walker.position.z + 0.02);
       if (f.carry !== null && !f.el.classList.contains('carrying')) f.el.classList.add('carrying');
       if (f.carry === null && f.el.classList.contains('carrying')) f.el.classList.remove('carrying');
       const breathe = Math.sin(p * 1.6) * (av.glossy ? 0.03 : 0.012);

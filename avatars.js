@@ -94,33 +94,35 @@ function buildMark(shape) {
 }
 
 // ===== 2. 上班族 =====
-function ornament(shape, mat) {
-  const g = new THREE.Group();
-  switch (shape) {
-    case 'drop': mesh(memo('o-drop', () => new THREE.ConeGeometry(0.1, 0.24, 7)), mat, g); break;
-    case 'flower': for (let i = 0; i < 5; i++) mesh(memo('o-ico06', () => new THREE.IcosahedronGeometry(0.06, 0)), mat, g, Math.cos(i * 1.2566) * 0.08, 0, Math.sin(i * 1.2566) * 0.08); break;
-    case 'clover': for (let i = 0; i < 3; i++) mesh(memo('o-ico07', () => new THREE.IcosahedronGeometry(0.07, 0)), mat, g, Math.cos(i * 2.094) * 0.075, 0, Math.sin(i * 2.094) * 0.075); break;
-    case 'hexagon': mesh(memo('o-hex', () => new THREE.CylinderGeometry(0.12, 0.12, 0.06, 6)), mat, g); break;
-    case 'star4': mesh(memo('o-oct', () => new THREE.OctahedronGeometry(0.13, 0)), mat, g); break;
-    default: mesh(memo('o-ico08', () => new THREE.IcosahedronGeometry(0.08, 0)), mat, g);
-  }
-  return g;
-}
-function buildOffice(shape) {
+// 上班族：深色頭髮（固定髮色）、白襯衫＋領帶，西裝外套才是 bot 的顏色
+const hairMat = std(0x2b2220, { roughness: 0.55 });
+const tieMat = std(0xc23a45, { roughness: 0.5 });
+const badgeMat = std(0xffffff, { roughness: 0.4 });
+function buildOffice() {
   const root = new THREE.Group();
-  const c = std(0x888888, { roughness: 0.5 });
-  const shirt = shared.white;
-  const body = mesh(memo('off-body', () => new THREE.CapsuleGeometry(0.23, 0.32, 3, 10)), c, root, 0, 0.86, 0);
-  mesh(memo('off-collar', () => new THREE.ConeGeometry(0.12, 0.16, 3)), shirt, root, 0, 1.1, 0.17).rotation.x = Math.PI + 0.25;
-  const head = new THREE.Group(); head.position.y = 1.42; root.add(head);
+  const c = std(0x888888, { roughness: 0.55 });
+  const body = mesh(memo('off-body', () => new THREE.CapsuleGeometry(0.24, 0.32, 3, 10)), c, root, 0, 0.86, 0);
+  // 襯衫前襟（V 領）＋領帶
+  const shirt = mesh(memo('off-shirt', () => new THREE.CylinderGeometry(0.0, 0.15, 0.34, 3, 1)), shared.white, root, 0, 1.0, 0.2);
+  shirt.rotation.set(Math.PI + 0.14, 0, 0); shirt.scale.set(1, 1, 0.35);
+  const knot = mesh(memo('off-knot', () => new THREE.OctahedronGeometry(0.035, 0)), tieMat, root, 0, 1.12, 0.245); knot.scale.set(1, 0.8, 0.6);
+  const tie = mesh(memo('off-tie', () => new THREE.ConeGeometry(0.045, 0.24, 4)), tieMat, root, 0, 0.98, 0.25); tie.rotation.set(Math.PI + 0.12, Math.PI / 4, 0); tie.scale.set(1, 1, 0.45);
+  // 識別證
+  const badge = mesh(memo('off-badge', () => new THREE.BoxGeometry(0.07, 0.09, 0.012)), badgeMat, root, 0.13, 0.9, 0.235); badge.rotation.x = -0.12;
+  const head = new THREE.Group(); head.position.y = 1.43; root.add(head);
   mesh(memo('off-head', () => new THREE.IcosahedronGeometry(0.25, 2)), shared.skin, head);
-  const hair = mesh(memo('off-hair', () => new THREE.SphereGeometry(0.265, 12, 6, 0, Math.PI * 2, 0, Math.PI * 0.42)), c, head, 0, 0.03, -0.02); hair.rotation.x = -0.35;
+  // 頭髮：頭頂＋後腦＋側分瀏海
+  const cap = mesh(memo('off-hair', () => new THREE.SphereGeometry(0.27, 14, 8, 0, Math.PI * 2, 0, Math.PI * 0.5)), hairMat, head, 0, 0.02, -0.02); cap.rotation.x = -0.28;
+  const back = mesh(memo('off-hairb', () => new THREE.SphereGeometry(0.262, 12, 8)), hairMat, head, 0, -0.02, -0.07); back.scale.set(1, 0.9, 0.8);
+  const fringe = mesh(memo('off-fringe', () => new THREE.CapsuleGeometry(0.06, 0.26, 2, 6)), hairMat, head, -0.04, 0.16, 0.17); fringe.rotation.set(0, 0, Math.PI / 2 - 0.35);
+  for (const sx of [-1, 1]) mesh(memo('off-ear', () => new THREE.SphereGeometry(0.05, 8, 6)), shared.skin, head, sx * 0.245, -0.02, 0).scale.set(0.5, 1, 0.8);
   face(head, 0.225, { r: 0.03, sx: 0.085, y: 0, blushY: -0.07 });
-  const armG = memo('off-arm', () => new THREE.CapsuleGeometry(0.06, 0.32, 2, 6));
-  const armL = mesh(armG, c, root, -0.27, 0.9, 0.2); armL.rotation.x = Math.PI / 2 - 0.25;
-  const armR = mesh(armG, c, root, 0.27, 0.9, 0.2); armR.rotation.x = Math.PI / 2 - 0.25;
-  const spin = ornament(shape, c); spin.position.y = 0.33; head.add(spin);
-  return { root, head, body, armL, armR, headY: 1.42, armY: 0.9, tint: [c], spin };
+  const armG = memo('off-arm', () => new THREE.CapsuleGeometry(0.065, 0.3, 2, 6));
+  const handG = memo('off-hand', () => new THREE.SphereGeometry(0.058, 8, 6));
+  const armL = new THREE.Group(); armL.position.set(-0.28, 0.9, 0.16); root.add(armL);
+  const armR = new THREE.Group(); armR.position.set(0.28, 0.9, 0.16); root.add(armR);
+  for (const a of [armL, armR]) { mesh(armG, c, a).rotation.x = Math.PI / 2 - 0.25; mesh(handG, shared.skin, a, 0, -0.04, 0.2); }
+  return { root, head, body, armL, armR, headY: 1.43, armY: 0.9, tint: [c], spin: null };
 }
 
 // ===== 3. 圓圓機器人 =====
@@ -146,28 +148,43 @@ function buildRobot() {
   return { root, head, body, armL, armR, headY: 1.4, armY: 0.92, tint: [c, tip.material], spin: null, robotTip: tip };
 }
 
-// ===== 4. 貓咪同事 =====
+// ===== 4. 貓咪同事：大尖耳、白鬍鬚、虎斑額紋、翹起的尾巴 =====
+const stripeMat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.28, depthWrite: false });
+const whiskerMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+const catEyeMat = new THREE.MeshStandardMaterial({ color: 0x9be36b, roughness: 0.2, emissive: 0x2a4a10, emissiveIntensity: 0.4 });
 function buildCat() {
   const root = new THREE.Group();
   const c = std(0x888888, { roughness: 0.75 });
-  const body = mesh(memo('cat-body', () => new THREE.CapsuleGeometry(0.23, 0.26, 3, 10)), c, root, 0, 0.84, 0);
-  mesh(memo('cat-belly', () => new THREE.SphereGeometry(0.15, 10, 8)), shared.white, root, 0, 0.82, 0.14).scale.set(1, 1.3, 0.6);
-  const head = new THREE.Group(); head.position.y = 1.4; root.add(head);
-  mesh(memo('cat-head', () => new THREE.IcosahedronGeometry(0.27, 2)), c, head).scale.set(1.12, 0.92, 1);
+  const body = mesh(memo('cat-body', () => new THREE.CapsuleGeometry(0.22, 0.24, 3, 10)), c, root, 0, 0.82, 0);
+  body.scale.set(1.05, 1, 1);
+  mesh(memo('cat-belly', () => new THREE.SphereGeometry(0.15, 10, 8)), shared.white, root, 0, 0.8, 0.14).scale.set(1, 1.3, 0.6);
+  const head = new THREE.Group(); head.position.y = 1.36; root.add(head);
+  mesh(memo('cat-head', () => new THREE.IcosahedronGeometry(0.28, 2)), c, head).scale.set(1.18, 0.9, 1);
   for (const s of [-1, 1]) {
-    const ear = mesh(memo('cat-ear', () => new THREE.ConeGeometry(0.1, 0.17, 4)), c, head, s * 0.16, 0.24, -0.02); ear.rotation.z = -s * 0.35;
-    const inner = mesh(memo('cat-ear2', () => new THREE.ConeGeometry(0.055, 0.1, 4)), shared.pink, head, s * 0.155, 0.235, 0.03); inner.rotation.z = -s * 0.35; inner.castShadow = false;
+    const ear = mesh(memo('cat-ear', () => new THREE.ConeGeometry(0.13, 0.26, 4)), c, head, s * 0.19, 0.27, -0.02); ear.rotation.set(0, Math.PI / 4, -s * 0.32);
+    const inner = mesh(memo('cat-ear2', () => new THREE.ConeGeometry(0.075, 0.16, 4)), shared.pink, head, s * 0.18, 0.25, 0.04); inner.rotation.set(0, Math.PI / 4, -s * 0.32); inner.castShadow = false;
   }
-  mesh(memo('cat-muzzle', () => new THREE.SphereGeometry(0.09, 10, 8)), shared.white, head, 0, -0.07, 0.21).scale.set(1.35, 0.8, 0.7);
-  mesh(memo('cat-nose', () => new THREE.SphereGeometry(0.025, 8, 6)), shared.pink, head, 0, -0.035, 0.27).castShadow = false;
-  face(head, 0.235, { r: 0.034, sx: 0.1, y: 0.04, smile: false, blushY: -0.1 });
-  const wh = memo('cat-wh', () => new THREE.BoxGeometry(0.16, 0.006, 0.006));
-  for (const s of [-1, 1]) for (const k of [-1, 1]) { const w = mesh(wh, shared.eye, head, s * 0.2, -0.07 + k * 0.022, 0.22); w.rotation.z = s * k * 0.15; w.castShadow = false; }
-  const tail = mesh(memo('cat-tail', () => new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.05, 0.1, -0.22), new THREE.Vector3(0.18, 0.4, -0.3), new THREE.Vector3(0.12, 0.62, -0.2)]), 16, 0.045, 6, false)), c, root, 0.05, 0.62, -0.18);
-  const pawG = memo('cat-paw', () => new THREE.CapsuleGeometry(0.06, 0.24, 2, 6));
-  const armL = mesh(pawG, c, root, -0.24, 0.9, 0.18); armL.rotation.x = Math.PI / 2 - 0.25;
-  const armR = mesh(pawG, c, root, 0.24, 0.9, 0.18); armR.rotation.x = Math.PI / 2 - 0.25;
-  return { root, head, body, armL, armR, headY: 1.4, armY: 0.9, tint: [c], spin: null, tail };
+  // 額頭虎斑
+  for (const [x, h] of [[-0.07, 0.07], [0, 0.09], [0.07, 0.07]]) { const st = mesh(memo('cat-stripe', () => new THREE.BoxGeometry(0.028, 1, 0.01)), stripeMat, head, x, 0.17, 0.24); st.scale.y = h; st.rotation.x = -0.5; st.castShadow = false; }
+  mesh(memo('cat-muzzle', () => new THREE.SphereGeometry(0.095, 10, 8)), shared.white, head, 0, -0.08, 0.215).scale.set(1.45, 0.8, 0.7);
+  mesh(memo('cat-nose', () => new THREE.ConeGeometry(0.03, 0.03, 3)), shared.pink, head, 0, -0.04, 0.28).rotation.x = Math.PI;
+  // 杏仁形綠眼（取代一般圓眼）
+  for (const s of [-1, 1]) {
+    const e = mesh(memo('cat-eye', () => new THREE.SphereGeometry(0.042, 10, 8)), catEyeMat, head, s * 0.105, 0.04, 0.235); e.scale.set(1.1, 1.0, 0.5); e.castShadow = false;
+    const pu = mesh(memo('cat-pupil', () => new THREE.SphereGeometry(0.03, 8, 6)), shared.eye, head, s * 0.105, 0.04, 0.252); pu.scale.set(0.35, 1.1, 0.4); pu.castShadow = false;
+    mesh(memo('cat-shine', () => new THREE.SphereGeometry(0.011, 6, 4)), shared.shine, head, s * 0.105 + 0.012, 0.058, 0.262).castShadow = false;
+  }
+  // 白色長鬍鬚，伸出臉頰外面才看得到
+  const wh = memo('cat-wh', () => new THREE.BoxGeometry(0.24, 0.012, 0.012));
+  for (const s of [-1, 1]) for (const k of [-1, 0, 1]) { const w = mesh(wh, whiskerMat, head, s * 0.24, -0.075 + k * 0.026, 0.2); w.rotation.z = s * k * 0.18; w.castShadow = false; }
+  // 尾巴從身體側邊翹起來，正面也看得到
+  const tail = mesh(memo('cat-tail', () => new THREE.TubeGeometry(new THREE.CatmullRomCurve3([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0.18, 0.02, -0.06), new THREE.Vector3(0.34, 0.22, 0.0), new THREE.Vector3(0.36, 0.5, 0.06), new THREE.Vector3(0.28, 0.66, 0.1)]), 20, 0.055, 7, false)), c, root, 0.12, 0.6, -0.12);
+  const tip = mesh(memo('cat-tailtip', () => new THREE.SphereGeometry(0.058, 8, 6)), shared.white, tail, 0.28, 0.66, 0.1); tip.castShadow = false;
+  const pawG = memo('cat-paw', () => new THREE.CapsuleGeometry(0.06, 0.22, 2, 6));
+  const armL = new THREE.Group(); armL.position.set(-0.23, 0.88, 0.16); root.add(armL);
+  const armR = new THREE.Group(); armR.position.set(0.23, 0.88, 0.16); root.add(armR);
+  for (const a of [armL, armR]) { mesh(pawG, c, a).rotation.x = Math.PI / 2 - 0.25; mesh(memo('cat-mitt', () => new THREE.SphereGeometry(0.065, 8, 6)), shared.white, a, 0, -0.04, 0.17); }
+  return { root, head, body, armL, armR, headY: 1.36, armY: 0.88, tint: [c], spin: null, tail };
 }
 
 // ===== 5. Q 版太空人 =====
@@ -198,14 +215,14 @@ function buildAstro() {
 
 export function buildAvatar(setId, shape) {
   switch (setId) {
-    case 'office': return buildOffice(shape);
+    case 'office': return buildOffice();
     case 'robot': return buildRobot();
     case 'cat': return buildCat();
     case 'astro': return buildAstro();
     default: return buildMark(shape);
   }
 }
-export const usesShape = (setId) => setId === 'mark' || setId === 'office' || !AVATAR_SETS.some(s => s.id === setId);
+export const usesShape = (setId) => setId === 'mark' || !AVATAR_SETS.some(s => s.id === setId);
 
 // 依外型顏色上色；太暗的顏色（例如黑色）稍微提亮並加一點自發光，夜景中才看得到
 export function tintAvatar(av, hex) {
@@ -219,8 +236,9 @@ export function tintAvatar(av, hex) {
   });
 }
 
+const KEEP = new Set([hairMat, tieMat, badgeMat, stripeMat, whiskerMat, catEyeMat]);
 export function disposeAvatar(av) {
-  av.root.traverse(o => { if (o.material && !Object.values(shared).includes(o.material) && !av.tint.includes(o.material)) o.material.dispose?.(); });
+  av.root.traverse(o => { if (o.material && !Object.values(shared).includes(o.material) && !KEEP.has(o.material) && !av.tint.includes(o.material)) o.material.dispose?.(); });
   av.tint.forEach(m => m.dispose?.());
   av.root.removeFromParent();
 }
