@@ -1,5 +1,5 @@
 // AI 辦公室：主程式（只讀 FEED；頻道代號從網址 # 取得，不寫在原始碼裡）
-import { BOTS, STATUS, emptyState, applyNtfy, serialize, deserialize, botMeta, lookColor, allBotKeys, taipei, taipeiIso, relative } from './feed.js';
+import { BOTS, STATUS, emptyState, applyNtfy, resolveBot, normStatus, serialize, deserialize, botMeta, lookColor, allBotKeys, taipei, taipeiIso, relative } from './feed.js';
 
 const $ = (id) => document.getElementById(id);
 const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
@@ -27,8 +27,8 @@ if (!topic) {
 }
 
 function tickClock() {
-  const f = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
-  $('clock').textContent = '台北時間 ' + f.format(new Date());
+  const f = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', month: 'numeric', day: 'numeric', weekday: 'narrow', hour: '2-digit', minute: '2-digit', hour12: false });
+  $('clock').textContent = '台北 ' + f.format(new Date());
 }
 
 function boot() {
@@ -40,7 +40,15 @@ function boot() {
 
   const save = () => { try { localStorage.setItem(KEY, serialize(state)); } catch { /* 空間不足時略過 */ } };
   const queueRender = () => { if (renderQueued) return; renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); };
-  function ingest(ev) { if (applyNtfy(state, ev)) { save(); queueRender(); } }
+  let live = false;
+  function ingest(ev) {
+    if (applyNtfy(state, ev)) {
+      save(); queueRender();
+      if (live && ev && ev.event === 'message') {
+        try { const b = JSON.parse(ev.message); if (b && b.bot && b.step) { const k = resolveBot(b.bot); if (k) inferDelivery(k, normStatus(b.status), String(b.step)); } } catch { }
+      }
+    }
+  }
 
   // ---- 連線指示 ----
   function setConn(s, text) { const c = $('conn'); c.dataset.state = s; c.querySelector('b').textContent = text; }
@@ -80,12 +88,91 @@ function boot() {
   }
   function stopPoll() { clearInterval(pollTimer); pollTimer = 0; }
 
+  // ---- 角色外型（存在這台裝置） ----
+  const SET_KEY = 'ai-office:avatar-set';
+  const SETS = [
+    ['mark', '標記吉祥物', '用各 bot 的標記形狀做成的圓潤小精靈'],
+    ['office', '上班族', '坐在辦公桌前的低多邊形小人'],
+    ['robot', '圓圓機器人', '圓滾滾的機器人，面罩會發光'],
+    ['cat', '貓咪同事', '有耳朵和尾巴的貓咪'],
+    ['astro', 'Q 版太空人', '戴頭盔、背背包的太空人'],
+  ];
+  let avatarSet = localStorage.getItem(SET_KEY);
+  if (!SETS.some(x => x[0] === avatarSet)) avatarSet = 'mark';
+  function renderSets() {
+    const box = $('sets'); box.replaceChildren();
+    for (const [id, name, desc] of SETS) {
+      const b = h('button', 'setcard'); b.type = 'button'; b.setAttribute('role', 'radio'); b.setAttribute('aria-checked', String(id === avatarSet));
+      const sw = h('div', 'swatches ' + id);
+      for (const k of BOTS.map(x => x.key)) { const i = h('i'); i.style.background = lookColor(state, k); sw.append(i); }
+      const t = h('b', null, name); if (id === 'mark') t.append(h('em', null, '預設'));
+      b.append(sw, t, h('span', null, desc));
+      b.addEventListener('click', () => {
+        avatarSet = id; try { localStorage.setItem(SET_KEY, id); } catch { }
+        office && office.setAvatarSet(id, state); renderSets();
+      });
+      box.append(b);
+    }
+  }
+
+  // ---- 白天／夜晚（自動依台北時間 06:00–18:00；可手動切換，記在這台裝置；網址可加 ?theme=day|night）----
+  const THEME_KEY = 'ai-office:theme';
+  const THEME_LABEL = { auto: '自動', day: '白天', night: '夜晚' };
+  let themePref = localStorage.getItem(THEME_KEY) || 'auto';
+  const qTheme = new URLSearchParams(location.search).get('theme');
+  if (['auto', 'day', 'night'].includes(qTheme)) themePref = qTheme;
+  if (!THEME_LABEL[themePref]) themePref = 'auto';
+  function taipeiHour() { return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Taipei', hour: '2-digit', hour12: false }).format(new Date())) % 24; }
+  function effectiveTheme() { if (themePref !== 'auto') return themePref; const hr = taipeiHour(); return hr >= 6 && hr < 18 ? 'day' : 'night'; }
+  function applyTheme() {
+    const t = effectiveTheme();
+    document.body.dataset.theme = t;
+    $('themeBtn').textContent = THEME_LABEL[themePref] + (themePref === 'auto' ? (t === 'day' ? '・白天' : '・夜晚') : '');
+    document.querySelector('meta[name="theme-color"]').setAttribute('content', t === 'day' ? '#6fb3f2' : '#151629');
+    office && office.setTheme(t);
+  }
+  $('themeBtn').addEventListener('click', () => {
+    themePref = themePref === 'auto' ? 'day' : themePref === 'day' ? 'night' : 'auto';
+    try { localStorage.setItem(THEME_KEY, themePref); } catch { }
+    applyTheme();
+  });
+  applyTheme(); setInterval(applyTheme, 60000);
+
+  // ---- 送資料：示範按鈕＋從 FEED 的步驟文字推斷（不改任何格式）----
+  const NAME_RE = BOTS.map(b => [b.key, new RegExp(b.key === 'akara' ? '阿卡拉' : b.short, 'i')]);
+  function mentioned(step, self) {
+    for (const [k, re] of NAME_RE) if (k !== self && re.test(step)) return k;
+    return null;
+  }
+  function inferDelivery(key, status, step) {
+    if (!office || !step || key.startsWith('x:')) return;
+    // 「轉交／交給／回報／通知／送／傳給 + 名字」→ 由這位 bot 送給被提到的人
+    const m = step.match(/(轉交給?|交給|交付給?|回報給?|通知|送給?|傳給)\s*([^\s，、。；:：]+)/);
+    let to = m ? mentioned(m[2], key) : null;
+    // 完成且提到交付、交件或回報，但沒寫給誰：送給 Nori（跨樓層）
+    if (!to && status === 'done' && /(交付|交件|已交|回報)/.test(step) && key !== 'nori') to = 'nori';
+    if (to) office.deliver(key, to, 'auto');
+  }
+  $('demoBtn').addEventListener('click', async () => {
+    if (!office) return;
+    const keys = BOTS.map(b => b.key);
+    const from = keys[Math.floor(Math.random() * keys.length)];
+    const others = keys.filter(k => k !== from && office.floorOf(k) !== office.floorOf(from));
+    const to = (others.length ? others : keys.filter(k => k !== from))[Math.floor(Math.random() * (others.length || keys.length - 1))];
+    const mode = Math.random() < 0.5 ? 'stairs' : 'elevator';
+    const meta = (k) => BOTS.find(b => b.key === k).short;
+    $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${mode === 'stairs' ? '走樓梯' : '搭電梯'}）`;
+    setDrawer('peek');
+    $('demoBtn').disabled = true;
+    try { await office.deliver(from, to, mode); } finally { $('demoBtn').disabled = false; }
+  });
+
   // ---- 3D ----
   async function init3d() {
     const { createOffice, webglAvailable } = await import('./office3d.js');
     if (!webglAvailable()) throw new Error('no webgl');
-    office = createOffice($('viewport'), $('overlay'), { onSelect: (k) => selectBot(k, true) });
-    updateInsets(); office.resetView(false);
+    office = createOffice($('viewport'), $('overlay'), { onSelect: (k) => selectBot(k, true), avatarSet });
+    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m);
     office.update(state);
   }
   function syncHeader() {
@@ -152,7 +239,7 @@ function boot() {
   // ---- 繪製 ----
   function render() {
     tickClock();
-    renderStats(); renderBots(); renderDetail(); renderUsage(); renderRoutines(); renderEvents();
+    renderStats(); renderBots(); renderDetail(); renderUsage(); renderRoutines(); renderEvents(); renderSets();
     office && office.update(state);
   }
 
@@ -276,5 +363,5 @@ function boot() {
   render();
   setInterval(render, 30000);
   setConn('off', '讀取中');
-  fetchSince('all').catch(() => setConn('down', '讀取失敗')).finally(() => connectSse());
+  fetchSince('all').catch(() => setConn('down', '讀取失敗')).finally(() => { setTimeout(() => { live = true; }, 3000); connectSse(); });
 }
