@@ -1,10 +1,11 @@
 // AI 辦公室：主程式（只讀 FEED；頻道代號從網址 # 取得，不寫在原始碼裡）
-import { BOTS, STATUS, emptyState, applyNtfy, resolveBot, normStatus, serialize, deserialize, botMeta, lookColor, allBotKeys, taipei, taipeiIso, relative } from './feed.js';
+import { BOTS, STATUS, emptyState, applyNtfy, resolveBot, normStatus, serialize, deserialize, botMeta, lookColor, allBotKeys, taipei, taipeiIso, relative, viewStatus, STALE_SEC } from './feed.js';
 
 const $ = (id) => document.getElementById(id);
 const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const FLOORS = [[3, '3F', '總管室'], [2, '2F', '工作區'], [1, '1F', '專案大廳'], [0, '其他', '未登記的 bot']];
 const POLL_MS = 15000;
+const SSE_OPEN_TIMEOUT = 6000;
 
 function readTopic() {
   let t = location.hash.replace(/^#/, '');
@@ -41,8 +42,10 @@ function boot() {
   const save = () => { try { localStorage.setItem(KEY, serialize(state)); } catch { /* 空間不足時略過 */ } };
   const queueRender = () => { if (renderQueued) return; renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); };
   let live = false;
+  let batching = false;
   function ingest(ev) {
     if (applyNtfy(state, ev)) {
+      if (batching) return;
       save(); queueRender();
       if (live && ev && ev.event === 'message') {
         try { const b = JSON.parse(ev.message); if (b && b.bot && b.step) { const k = resolveBot(b.bot); if (k) inferDelivery(k, normStatus(b.status), String(b.step)); } } catch { }
@@ -58,17 +61,24 @@ function boot() {
     const res = await fetch(`${BASE}/json?poll=1&since=${encodeURIComponent(since)}`, { cache: 'no-store', credentials: 'omit', referrerPolicy: 'no-referrer' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
-    for (const line of text.split('\n')) { if (!line.trim()) continue; try { ingest(JSON.parse(line)); } catch { /* 略過壞行 */ } }
+    batching = true;
+    try { for (const line of text.split('\n')) { if (!line.trim()) continue; try { ingest(JSON.parse(line)); } catch { /* 略過壞行 */ } } }
+    finally { batching = false; }
+    save(); render();
   }
 
   // ---- 即時更新：SSE，失敗時改輪詢 ----
-  let es = null, pollTimer = 0, errCount = 0, retrySse = 0;
+  let es = null, pollTimer = 0, errCount = 0, retrySse = 0, openTimer = 0;
   function connectSse() {
     if (!('EventSource' in window)) return startPoll();
     try { es && es.close(); } catch { }
-    const since = state.lastTime ? String(state.lastTime) : 'all';
-    es = new EventSource(`${BASE}/sse?since=${since}`);
-    es.onopen = () => { errCount = 0; stopPoll(); setConn('live', '即時連線'); };
+    // 歷史已經讀過，只要從最後一筆之後開始接；沒有就只收新的
+    const since = state.lastId ? state.lastId : (state.lastTime ? String(state.lastTime) : '');
+    es = new EventSource(`${BASE}/sse` + (since ? `?since=${encodeURIComponent(since)}` : ''));
+    clearTimeout(openTimer);
+    // SSE 太慢就先輪詢，不讓畫面卡住；連上後自動停止輪詢
+    openTimer = setTimeout(() => { if (!es || es.readyState !== 1) startPoll(true); }, SSE_OPEN_TIMEOUT);
+    es.onopen = () => { errCount = 0; clearTimeout(openTimer); stopPoll(); setConn('live', '即時連線'); };
     es.onmessage = (m) => { try { ingest(JSON.parse(m.data)); } catch { } };
     es.onerror = () => {
       errCount++;
@@ -76,9 +86,10 @@ function boot() {
       else setConn('down', '重新連線中');
     };
   }
-  function startPoll() {
+  function startPoll(keepSse) {
     if (pollTimer) return;
     setConn('poll', '輪詢中（15 秒）');
+    if (keepSse) { pollTimer = setInterval(() => fetchSince(state.lastTime ? String(state.lastTime) : 'all').catch(() => {}), POLL_MS); return; }
     const tick = async () => {
       try { await fetchSince(state.lastTime ? String(state.lastTime) : 'all'); setConn('poll', '輪詢中（15 秒）'); }
       catch { setConn('down', '連線中斷，重試中'); }
@@ -188,7 +199,7 @@ function boot() {
     office.setInsets(header + 12, wide ? 16 : (document.getElementById('drawer').getBoundingClientRect().height ? peekHeight() + 40 : 150));
   }
   const peekHeight = () => parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--peek-h')) || 112;
-  init3d().catch((err) => { console.warn('3D 停用：', err && err.message); document.body.classList.add('no3d'); $('fallback').hidden = false; $('hint').hidden = true; setDrawer('open'); });
+  const start3d = () => init3d().catch((err) => { console.warn('3D 停用：', err && err.message); document.body.classList.add('no3d'); $('fallback').hidden = false; $('hint').hidden = true; setDrawer('open'); });
   $('resetView').addEventListener('click', () => { updateInsets(); office && office.resetView(true); });
   setTimeout(() => $('hint').classList.add('gone'), 6000);
   addEventListener('resize', () => { updateInsets(); });
@@ -255,12 +266,16 @@ function boot() {
     }
   }
 
-  function timeLine(t) { return t ? `${taipei(t)}（${relative(t)}）` : '尚無更新'; }
+  function timeLine(t) {
+    if (!t) return '超過 12 小時未更新';
+    const old = Date.now() / 1000 - t > STALE_SEC;
+    return `${taipei(t)}（${relative(t)}）` + (old ? '・超過 12 小時未更新' : '');
+  }
 
   function botCard(key) {
-    const meta = botMeta(state, key), s = state.bots[key];
-    const status = s ? s.status : 'unknown', sc = STATUS[status];
-    const card = h('div', 'bot' + (selected === key ? ' sel' : ''));
+    const meta = botMeta(state, key), v = viewStatus(state, key), s = v.s;
+    const status = v.status, sc = STATUS[status];
+    const card = h('div', 'bot' + (selected === key ? ' sel' : '') + (v.stale ? ' stale' : ''));
     card.tabIndex = 0; card.setAttribute('role', 'button');
     card.addEventListener('click', () => selectBot(key, false));
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectBot(key, false); } });
@@ -270,7 +285,7 @@ function boot() {
     top.append(h('span', 'bot-name', meta.short));
     const badge = h('span', 'badge', sc.label); badge.style.background = sc.color; top.append(badge);
     if (state.groups[key]) top.append(h('span', 'grp', state.groups[key]));
-    main.append(top, h('div', 'bot-step', s && s.step ? s.step : '尚無狀態訊息'));
+    main.append(top, h('div', 'bot-step', s && s.step ? s.step : (s ? '（沒有步驟文字）' : '這台裝置沒有更早的紀錄')));
     const tl = h('div', 'bot-time'); tl.append(h('span', null, timeLine(s && s.time)));
     if (state.chat[key] && !/^(javascript|data|vbscript|file):/i.test(state.chat[key])) { const a = h('a', null, '開啟對話 ›'); a.href = state.chat[key]; a.rel = 'noopener noreferrer'; a.addEventListener('click', e => e.stopPropagation()); tl.append(a); }
     main.append(tl);
@@ -292,14 +307,14 @@ function boot() {
   function renderDetail() {
     const d = $('detail');
     if (!selected) { d.hidden = true; return; }
-    const meta = botMeta(state, selected), s = state.bots[selected];
-    const sc = STATUS[s ? s.status : 'unknown'];
+    const meta = botMeta(state, selected), v = viewStatus(state, selected), s = v.s;
+    const sc = STATUS[v.status];
     d.replaceChildren();
     const hh = h('h3', null, meta.name);
     const x = h('button', 'closebtn', '✕'); x.type = 'button'; x.setAttribute('aria-label', '關閉詳情');
     x.addEventListener('click', (e) => { e.stopPropagation(); selected = null; office && office.select(null); renderDetail(); renderBots(); });
     d.append(x, hh);
-    d.append(h('p', null, `狀態：${sc.label}${s && s.rawStatus && s.status === 'unknown' ? `（${s.rawStatus}）` : ''}`));
+    d.append(h('p', null, `狀態：${sc.label}${s && s.rawStatus && v.status === 'other' ? `（${s.rawStatus}）` : ''}`));
     d.append(h('p', null, `目前步驟：${s && s.step ? s.step : '—'}`));
     d.append(h('p', null, `最後更新：${timeLine(s && s.time)}`));
     const r = state.routines[selected];
@@ -360,8 +375,15 @@ function boot() {
     }
   }
 
+  // 開場順序：先畫快取 → 立刻抓 12 小時歷史並畫出清單 → 開 SSE → 最後才載入 3D（不擋住資料）
   render();
   setInterval(render, 30000);
   setConn('off', '讀取中');
-  fetchSince('all').catch(() => setConn('down', '讀取失敗')).finally(() => { setTimeout(() => { live = true; }, 3000); connectSse(); });
+  let started3d = false;
+  const kick3d = () => { if (started3d) return; started3d = true; setTimeout(start3d, 0); };
+  setTimeout(kick3d, 2500);
+  fetchSince('all')
+    .then(() => setConn('off', '已載入，連線中'))
+    .catch(() => setConn('down', '讀取失敗，重試中'))
+    .finally(() => { connectSse(); setTimeout(() => { live = true; }, 3000); requestAnimationFrame(kick3d); });
 }

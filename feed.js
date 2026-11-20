@@ -16,15 +16,26 @@ export const STATUS = {
   idle:         { label: '待命',     color: '#a3acc2', glyph: 'z' },
   waiting_user: { label: '等待用戶', color: '#ffb648', glyph: '!' },
   error:        { label: '錯誤',     color: '#ff5d6c', glyph: '!' },
-  unknown:      { label: '無資料',   color: '#6f7890', glyph: '?' },
+  other:        { label: '其他狀態', color: '#8e8ba8', glyph: '?' },
+  unknown:      { label: '超過 12 小時未更新', color: '#6f7890', glyph: '?' },
 };
+
+// 超過這個時間沒有新狀態，就標示「超過 12 小時未更新」
+export const STALE_SEC = 12 * 3600;
+// 給畫面用的狀態：沒資料 → unknown；有資料但太舊 → stale = true
+export function viewStatus(state, key, nowMs = Date.now()) {
+  const s = state.bots[key];
+  if (!s || !s.time) return { s: null, status: 'unknown', stale: true };
+  const stale = nowMs / 1000 - s.time > STALE_SEC;
+  return { s, status: s.status in STATUS ? s.status : 'other', stale };
+}
 
 const EXTRA_PALETTE = ['#a78bfa', '#f472b6', '#34d399', '#fbbf24', '#60a5fa', '#f87171'];
 const MAX_EVENTS = 30;
 
 export function normStatus(s) {
   const v = String(s ?? '').trim().toLowerCase().replace(/[\s-]+/g, '_');
-  return Object.prototype.hasOwnProperty.call(STATUS, v) && v !== 'unknown' ? v : 'unknown';
+  return Object.prototype.hasOwnProperty.call(STATUS, v) && v !== 'unknown' && v !== 'other' ? v : 'other';
 }
 
 function firstToken(name) {
@@ -188,6 +199,9 @@ export function deserialize(json) {
   } catch { /* 忽略壞資料 */ }
   if (!Array.isArray(s.events)) s.events = [];
   if (!Array.isArray(s.roster)) s.roster = [];
+  if (!isObj(s.bots)) s.bots = {};
+  // 舊版快取的 'unknown'（格式不明）改成 'other'
+  for (const v of Object.values(s.bots)) if (isObj(v) && v.status === 'unknown') v.status = 'other';
   return s;
 }
 
