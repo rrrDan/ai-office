@@ -183,7 +183,7 @@ function boot() {
     const { createOffice, webglAvailable } = await import('./office3d.js');
     if (!webglAvailable()) throw new Error('no webgl');
     office = createOffice($('viewport'), $('overlay'), { onSelect: (k) => selectBot(k, true), avatarSet });
-    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m);
+    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m); window.__aiOfficeWhere = (k) => office.where(k);
     office.update(state);
   }
   function syncHeader() {

@@ -781,7 +781,14 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
 
   function setAvatarSet(id, state) { currentSet = id; if (state) update(state); }
   const floorOf = (k) => figures.get(k)?.floor || 0;
-  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf };
+  // 唯讀：目前人物在 3D 中的位置（給檢查用）
+  function where(k) {
+    const f = figures.get(k); if (!f) return null;
+    const fl = Math.round((f.walker.position.y - floorY(1)) / FLOOR_H) + 1;
+    const spot = (f.walk || f.moving || f.carry !== null) ? 'walking' : (f.atDesk ? 'desk' : 'lounge');
+    return { floor: fl, spot, x: +f.walker.position.x.toFixed(2), z: +f.walker.position.z.toFixed(2) };
+  }
+  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where };
 }
 
 export function webglAvailable() {
