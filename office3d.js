@@ -2,14 +2,25 @@
 import * as THREE from './vendor/three/three.module.min.js';
 import { OrbitControls } from './vendor/three/OrbitControls.js';
 import { BOTS, STATUS, botMeta, lookColor } from './feed.js';
+import { buildAvatar, tintAvatar, disposeAvatar, usesShape, DEFAULT_SET } from './avatars.js';
 
 const FLOOR_H = 5.0, WALL_H = 2.5, W = 12, D = 8, SLAB = 0.26;  // 樓層錯開堆疊（像剖面模型），從斜上方可看進每一層
 const FLOOR_INFO = { 3: '3F・總管室', 2: '2F・工作區', 1: '1F・專案大廳' };
-const SEATS = {
+const SEATS = {   // 辦公桌位置 [x, z]
   nori: [0, -0.4], akara: [0.6, -0.2],
-  meron: [-2.8, -1.3], yuzu: [2.8, -1.3], goya: [-2.8, 1.7], ichigo: [2.8, 1.7],
+  meron: [-3.5, -1.3], yuzu: [3.5, -1.3], goya: [-3.5, 1.7], ichigo: [3.5, 1.7],
 };
-const EXTRA_SEATS = [[-3.8, 1.8], [4.2, 1.6], [-4.2, -1.9], [4.2, -2.0]];
+const EXTRA_SEATS = [[3.6, 1.9], [3.6, -1.6], [-3.4, -2.2]];
+// 休息區座位 [x, z, 朝向]（沙發座面中心）
+const LOUNGE = {
+  nori: [-3.4, 0.55, 0],
+  meron: [-0.5, -0.95, 0], yuzu: [0.5, -0.95, 0], goya: [-1.75, 0.7, 0.45], ichigo: [1.75, 0.7, -0.45],
+  akara: [-4.1, 0.55, 0],
+};
+const EXTRA_LOUNGE = [[-3.2, 0.55, 0], [-2.05, 1.5, -0.5], [-2.3, 0.4, -0.3]];
+const WALK_MS = 1500;
+const AISLE = 3.1, STAIR_X = -6.95, LANE_L = -5.35, LANE_R = 4.75, ELEV_X = 7.15, ELEV_DOOR_X = 5.85, WALK_SPEED = 3.0;
+const stairZ = (f) => (f % 2 ? 3.1 : -3.1);   // 1F、3F 樓梯口在前方，2F 在後方（之字形樓梯）
 const PAL = {
   slab: 0xf1e6d4, slabEdge: 0x2e2b45, pillar: 0x3b3856, mullion: 0x4a4668,
   desk: 0xf7f1e8, deskLeg: 0x3a3a4a, chair: 0x3d4466, chairSeat: 0x4b5580,
@@ -52,28 +63,8 @@ function blobTexture() {
   return new THREE.CanvasTexture(c);
 }
 
-function ornament(shape, mat) {
-  let geo;
-  switch (shape) {
-    case 'drop': geo = new THREE.ConeGeometry(0.1, 0.24, 7); break;
-    case 'flower': {
-      const grp = new THREE.Group();
-      for (let i = 0; i < 5; i++) { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.06, 0), mat); m.position.set(Math.cos(i * 1.2566) * 0.08, 0, Math.sin(i * 1.2566) * 0.08); grp.add(m); }
-      const c = new THREE.Mesh(new THREE.IcosahedronGeometry(0.05, 0), std(0xffe9a8)); grp.add(c); return grp;
-    }
-    case 'clover': {
-      const grp = new THREE.Group();
-      for (let i = 0; i < 3; i++) { const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.07, 0), mat); m.position.set(Math.cos(i * 2.094) * 0.075, 0, Math.sin(i * 2.094) * 0.075); grp.add(m); }
-      return grp;
-    }
-    case 'hexagon': geo = new THREE.CylinderGeometry(0.12, 0.12, 0.06, 6); break;
-    case 'star4': geo = new THREE.OctahedronGeometry(0.13, 0); break;
-    default: geo = new THREE.IcosahedronGeometry(0.08, 0);
-  }
-  return new THREE.Mesh(geo, mat);
-}
-
-export function createOffice(container, overlay, { onSelect } = {}) {
+export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT_SET } = {}) {
+  let currentSet = avatarSet;
   let running = false, raf = 0, onScreen = true;
   const clock = new THREE.Clock();
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'low-power' });
@@ -90,7 +81,7 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   Object.assign(controls, { enableDamping: true, dampingFactor: 0.07, minDistance: 7, maxDistance: 75, rotateSpeed: 0.65, zoomSpeed: 0.9, panSpeed: 0.7, screenSpacePanning: true, maxPolarAngle: Math.PI * 0.485, minPolarAngle: 0.2 });
 
   // 光線：暖色主光 + 冷色補光 + 每層室內暖燈
-  scene.add(new THREE.HemisphereLight(0xffe8d2, 0x2a2442, 1.05));
+  const hemi = new THREE.HemisphereLight(0xffe8d2, 0x2a2442, 1.05); scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffd2a6, 2.1);
   sun.position.set(10, 26, 16); sun.castShadow = true;
   Object.assign(sun.shadow.camera, { left: -13, right: 13, top: 15, bottom: -9, near: 2, far: 70 });
@@ -99,9 +90,9 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   const rim = new THREE.DirectionalLight(0x9db4ff, 0.7); rim.position.set(-12, 10, -14); scene.add(rim);
 
   // 地面廣場
-  const ground = new THREE.Mesh(new THREE.CircleGeometry(48, 40), new THREE.MeshStandardMaterial({ color: 0x24223a, roughness: 1 }));
+  const ground = new THREE.Mesh(new THREE.CircleGeometry(48, 40), new THREE.MeshStandardMaterial({ color: 0x24223a, roughness: 1 })); const groundMat = ground.material;
   ground.rotation.x = -Math.PI / 2; ground.position.y = -SLAB; ground.receiveShadow = true; scene.add(ground);
-  const pad = new THREE.Mesh(new THREE.CircleGeometry(10.5, 40), new THREE.MeshStandardMaterial({ color: 0x302d4a, roughness: 0.95 }));
+  const pad = new THREE.Mesh(new THREE.CircleGeometry(12, 40), new THREE.MeshStandardMaterial({ color: 0x302d4a, roughness: 0.95 })); const padMat = pad.material;
   pad.rotation.x = -Math.PI / 2; pad.position.y = -SLAB + 0.01; pad.receiveShadow = true; scene.add(pad);
   const blob = blobTexture();
   const blobMat = new THREE.MeshBasicMaterial({ map: blob, transparent: true, depthWrite: false });
@@ -128,6 +119,8 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   const chairMat = std(PAL.chair), chairSeatMat = std(PAL.chairSeat);
   const potMat = std(PAL.pot), leafMat = std(PAL.leaf), leaf2Mat = std(PAL.leaf2);
   const lampMat = new THREE.MeshStandardMaterial({ color: 0xfff1dc, emissive: 0xffd9a8, emissiveIntensity: 1.6 });
+  const deskLampMat = new THREE.MeshStandardMaterial({ color: 0xfff3dd, emissive: 0xffc078, emissiveIntensity: 0.2 });
+  const floorLights = [];
   const H = WALL_H;
 
   const add = (mesh, parent = scene, cast = true, recv = true) => { mesh.castShadow = cast; mesh.receiveShadow = recv; parent.add(mesh); return mesh; };
@@ -153,6 +146,34 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     const m = std(color);
     box(1.8, 0.36, 0.8, m, 0, 0.26, 0, g); box(1.8, 0.5, 0.2, m, 0, 0.6, -0.32, g);
     box(0.2, 0.42, 0.8, m, -0.85, 0.45, 0, g); box(0.2, 0.42, 0.8, m, 0.85, 0.45, 0, g);
+    const cush = std(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.25).getHex());
+    box(0.78, 0.08, 0.66, cush, -0.4, 0.47, 0.04, g); box(0.78, 0.08, 0.66, cush, 0.4, 0.47, 0.04, g);
+    scene.add(g);
+  }
+  function armchair(x, y, z, color, rotY = 0) {
+    const g = new THREE.Group(); g.position.set(x, y, z); g.rotation.y = rotY;
+    const m = std(color);
+    box(0.9, 0.36, 0.8, m, 0, 0.26, 0, g); box(0.9, 0.5, 0.2, m, 0, 0.6, -0.32, g);
+    box(0.16, 0.4, 0.8, m, -0.45, 0.44, 0, g); box(0.16, 0.4, 0.8, m, 0.45, 0.44, 0, g);
+    box(0.7, 0.08, 0.64, std(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.25).getHex()), 0, 0.47, 0.04, g);
+    scene.add(g);
+  }
+  function coffeeTable(x, y, z, r = 0.5) {
+    const g = new THREE.Group(); g.position.set(x, y, z);
+    add(new THREE.Mesh(new THREE.CylinderGeometry(r, r, 0.06, 18), deskMat), g).position.y = 0.42;
+    add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.08, 0.4, 8), legMat), g).position.y = 0.2;
+    add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.03, 12), legMat), g).position.y = 0.015;
+    box(0.08, 0.09, 0.08, std(0xff9e7a), -0.15, 0.5, 0.08, g); box(0.08, 0.09, 0.08, std(0x7ac4ff), 0.18, 0.5, -0.06, g);
+    box(0.26, 0.03, 0.18, std(0xffd27a), 0.02, 0.465, 0.18, g);
+    scene.add(g);
+  }
+  function coffeeBar(x, y, z) {
+    const g = new THREE.Group(); g.position.set(x, y, z);
+    box(1.9, 0.9, 0.55, std(0x6b5a7e), 0, 0.45, 0, g); box(2.0, 0.06, 0.62, deskMat, 0, 0.93, 0, g);
+    box(0.42, 0.5, 0.36, std(0x2d2b3d, { metalness: 0.4, roughness: 0.3 }), -0.5, 1.21, -0.02, g);
+    box(0.3, 0.06, 0.06, new THREE.MeshStandardMaterial({ color: 0xffc98f, emissive: 0xffa860, emissiveIntensity: 1.2 }), -0.5, 1.36, 0.17, g);
+    for (let i = 0; i < 3; i++) box(0.09, 0.1, 0.09, std([0xffffff, 0xff9e7a, 0x9be0b4][i]), 0.15 + i * 0.18, 1.01, 0.05, g);
+    add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.16, 0), leafMat), g).position.set(0.78, 1.12, 0);
     scene.add(g);
   }
 
@@ -172,26 +193,111 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     for (let i = 1; i < 6; i++) box(0.06, H, 0.06, mullionMat, -W / 2 + i * W / 6, y + H / 2, -D / 2 + 0.05);
     box(W, 0.06, 0.08, mullionMat, 0, y + 0.9, -D / 2 + 0.05); box(W, 0.08, 0.1, mullionMat, 0, y + H, -D / 2 + 0.05);
     for (const sx of [-1, 1]) {
-      const s = new THREE.Mesh(new THREE.PlaneGeometry(D, H), glassMat); s.rotation.y = Math.PI / 2; s.position.set(sx * (W / 2 - 0.05), y + H / 2, 0); scene.add(s);
-      for (let i = 1; i < 4; i++) box(0.06, H, 0.06, mullionMat, sx * (W / 2 - 0.05), y + H / 2, -D / 2 + i * D / 4);
-      box(0.08, 0.06, D, mullionMat, sx * (W / 2 - 0.05), y + 0.9, 0); box(0.1, 0.08, D, mullionMat, sx * (W / 2 - 0.05), y + H, 0);
+      const gap = sx < 0 ? [stairZ(f) - 0.7, stairZ(f) + 0.7] : [-0.8, 0.8];   // 左：樓梯出入口；右：電梯門
+      const wx = sx * (W / 2 - 0.05);
+      for (const [z0, z1] of [[-D / 2, gap[0]], [gap[1], D / 2]]) {
+        const len = z1 - z0; if (len <= 0.05) continue; const zc = (z0 + z1) / 2;
+        const g = new THREE.Mesh(new THREE.PlaneGeometry(len, H), glassMat); g.rotation.y = Math.PI / 2; g.position.set(wx, y + H / 2, zc); scene.add(g);
+        box(0.08, 0.06, len, mullionMat, wx, y + 0.9, zc);
+        box(0.08, H, 0.08, mullionMat, wx, y + H / 2, z0 === -D / 2 ? z1 : z0);
+      }
+      box(0.1, 0.08, D, mullionMat, wx, y + H, 0);
     }
     // 樓層牌
     const sign = new THREE.Mesh(new THREE.PlaneGeometry(2.3, 0.575), new THREE.MeshBasicMaterial({ map: signTexture(FLOOR_INFO[f]), transparent: true, toneMapped: false }));
     sign.position.set(-W / 2 + 2.9, y + 0.3, D / 2 + 0.1); scene.add(sign);
     // 室內暖光
-    const pl = new THREE.PointLight(0xffc98f, 10, 14, 1.4); pl.position.set(0, y + 3.2, 1.2); scene.add(pl);
+    const pl = new THREE.PointLight(0xffc98f, 10, 14, 1.4); pl.position.set(0, y + 3.2, 1.2); scene.add(pl); floorLights.push(pl);
     // 地毯
     const rug = new THREE.Mesh(new THREE.PlaneGeometry(W - 2.4, D - 2.6), std(PAL.rug[f], { roughness: 1, flatShading: false, transparent: true, opacity: 0.55 }));
     rug.rotation.x = -Math.PI / 2; rug.position.set(0, y + 0.006, 0); rug.receiveShadow = true; scene.add(rug);
     plant(W / 2 - 0.75, y, -D / 2 + 0.75, 1.05);
-    plant(-W / 2 + 0.75, y, D / 2 - 0.8, 0.85);
+    plant(W / 2 - 0.75, y, D / 2 - 0.8, 0.8);
   }
+  // ===== 左側樓梯（之字形，連接 1F-2F-3F）=====
+  const stairMat = std(0xe9dcc6, { roughness: 0.7 }), stairEdge = std(0x3b3856, { roughness: 0.5 });
+  for (let f = 1; f <= 3; f++) {
+    const z = stairZ(f), y = floorY(f);
+    box(1.3, 0.2, 1.4, stairMat, STAIR_X, y - 0.1, z);
+    box(1.34, 0.08, 1.44, stairEdge, STAIR_X, y - 0.22, z);
+    if (f > 1) { box(0.14, y, 0.14, pillarMat, STAIR_X - 0.6, y / 2 - 0.2, z + (z > 0 ? 0.6 : -0.6)); }
+    box(0.05, 0.9, 1.4, stairEdge, STAIR_X - 0.64, y + 0.45, z);
+    if (f < 3) {
+      const z2 = stairZ(f + 1), dir = Math.sign(z2 - z), y2 = floorY(f + 1);
+      const zs = z + dir * 0.7, ze = z2 - dir * 0.7, N = 16;
+      for (let i = 0; i < N; i++) {
+        const u = (i + 0.5) / N;
+        box(1.1, 0.12, Math.abs(ze - zs) / N + 0.02, stairMat, STAIR_X, y + (y2 - y) * ((i + 1) / N) - 0.06, zs + (ze - zs) * u);
+      }
+      const run = Math.abs(ze - zs), rise = y2 - y, len = Math.hypot(run, rise), ang = Math.atan2(rise, run);
+      for (const ox of [-0.6, 0.6]) {
+        const st = box(0.08, 0.3, len, stairEdge, STAIR_X + ox, y + rise / 2 - 0.1, (zs + ze) / 2); st.rotation.x = dir > 0 ? ang : -ang;
+      }
+      const rail = box(0.05, 0.05, len, legMat, STAIR_X - 0.62, y + rise / 2 + 0.9, (zs + ze) / 2); rail.rotation.x = dir > 0 ? ang : -ang;
+      for (let i = 0; i <= 4; i++) { const u = i / 4; box(0.04, 0.9, 0.04, legMat, STAIR_X - 0.62, y + rise * u + 0.45, zs + (ze - zs) * u); }
+    }
+  }
+
+  // ===== 右側電梯（玻璃井道＋車廂＋滑門）=====
+  const SHAFT_H = floorY(3) + WALL_H + 0.9;
+  for (const [ox, oz] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) box(0.12, SHAFT_H + SLAB, 0.12, pillarMat, ELEV_X + ox, (SHAFT_H - SLAB) / 2, oz);
+  box(1.75, 0.14, 1.75, pillarMat, ELEV_X, SHAFT_H, 0);
+  const shaftGlass = new THREE.MeshPhysicalMaterial({ color: 0xcfe0ff, transparent: true, opacity: 0.14, roughness: 0.05, depthWrite: false, side: THREE.DoubleSide });
+  { const gx = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gx.rotation.y = Math.PI / 2; gx.position.set(ELEV_X + 0.8, SHAFT_H / 2, 0); scene.add(gx);
+    for (const sz of [-1, 1]) { const gz = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gz.position.set(ELEV_X, SHAFT_H / 2, sz * 0.8); scene.add(gz); } }
+  for (let f = 1; f <= 3; f++) { box(0.62, 0.08, 1.5, slabEdgeMat, W / 2 + 0.31, floorY(f) - 0.04, 0); }
+  const cabin = new THREE.Group(); scene.add(cabin);
+  const cabFrame = std(0x4a4668, { roughness: 0.4, metalness: 0.3 });
+  box(1.4, 0.08, 1.4, cabFrame, ELEV_X, 0.0, 0, cabin); box(1.4, 0.08, 1.4, cabFrame, ELEV_X, 2.3, 0, cabin);
+  for (const [ox, oz] of [[-0.68, -0.68], [0.68, -0.68], [-0.68, 0.68], [0.68, 0.68]]) box(0.06, 2.3, 0.06, cabFrame, ELEV_X + ox, 1.15, oz, cabin);
+  const cabGlass = new THREE.MeshPhysicalMaterial({ color: 0xffe7c4, transparent: true, opacity: 0.22, roughness: 0.1, depthWrite: false, side: THREE.DoubleSide });
+  { const bk = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); bk.rotation.y = Math.PI / 2; bk.position.set(ELEV_X + 0.68, 1.15, 0); cabin.add(bk);
+    for (const sz of [-1, 1]) { const sd = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); sd.position.set(ELEV_X, 1.15, sz * 0.68); cabin.add(sd); } }
+  const cabLight = box(0.9, 0.03, 0.9, lampMat, ELEV_X, 2.24, 0, cabin); cabLight.castShadow = false;
+  const doorMat = std(0xb9bfd3, { roughness: 0.3, metalness: 0.5 });
+  const doorL = box(0.05, 2.18, 0.66, doorMat, ELEV_X - 0.7, 1.13, -0.33, cabin);
+  const doorR = box(0.05, 2.18, 0.66, doorMat, ELEV_X - 0.7, 1.13, 0.33, cabin);
+  const elev = { y: 0, door: 0, lock: Promise.resolve() };
+  function applyElev() { cabin.position.y = elev.y; doorL.position.z = -0.33 - elev.door * 0.62; doorR.position.z = 0.33 + elev.door * 0.62; }
+  applyElev();
+
+  // ===== 窗外城市（白天是建築立面，夜晚窗戶亮燈）=====
+  function windowTex(lit) {
+    const c = document.createElement('canvas'); c.width = 64; c.height = 128; const g = c.getContext('2d');
+    g.fillStyle = lit ? '#000' : '#fff'; g.fillRect(0, 0, 64, 128);
+    for (let yy = 6; yy < 124; yy += 12) for (let xx = 5; xx < 60; xx += 11) {
+      if (lit) { if (Math.random() < 0.45) { g.fillStyle = Math.random() < 0.7 ? '#ffd38a' : '#bfe0ff'; g.fillRect(xx, yy, 7, 7); } }
+      else { g.fillStyle = 'rgba(80,110,150,0.55)'; g.fillRect(xx, yy, 7, 7); }
+    }
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+  }
+  const cityMat = new THREE.MeshStandardMaterial({ color: 0x8090a8, roughness: 0.9, map: windowTex(false), emissiveMap: windowTex(true), emissive: 0xffffff, emissiveIntensity: 0 });
+  const city = new THREE.Group(); scene.add(city);
+  for (let i = 0; i < 30; i++) {
+    const a = (i / 30) * Math.PI * 2 + (i % 3) * 0.05, r = 30 + (i * 7 % 5) * 2.4;
+    if (Math.cos(a) > 0.55 && Math.abs(Math.sin(a)) < 0.6) continue;
+    const w = 2.5 + (i * 13 % 4), hgt = 6 + (i * 17 % 9) * 2, d = 2.5 + (i * 5 % 3);
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, hgt, d), cityMat);
+    b.position.set(Math.sin(a) * r, hgt / 2 - SLAB, Math.cos(a) * r - 4); b.rotation.y = a; city.add(b);
+  }
+  const starGeo = new THREE.BufferGeometry(); const sp = [];
+  for (let i = 0; i < 260; i++) { const th = Math.random() * Math.PI * 2, ph = Math.random() * 0.45 + 0.08, R = 120; sp.push(Math.cos(th) * Math.cos(ph) * R, Math.sin(ph) * R, Math.sin(th) * Math.cos(ph) * R); }
+  starGeo.setAttribute('position', new THREE.Float32BufferAttribute(sp, 3));
+  const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xffffff, size: 0.9, sizeAttenuation: true, transparent: true, opacity: 0.9, fog: false }));
+  scene.add(stars);
+  const moon = new THREE.Mesh(new THREE.SphereGeometry(3.2, 20, 14), new THREE.MeshBasicMaterial({ color: 0xfff4d6, fog: false }));
+  moon.position.set(-45, 60, -70); scene.add(moon);
+  const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(5, 20, 14), new THREE.MeshBasicMaterial({ color: 0xfff1c9, fog: false }));
+  sunDisc.position.set(55, 62, -80); scene.add(sunDisc);
+
   // 樓層專屬擺設
   shelf(-3.6, floorY(3), -D / 2 + 0.45); shelf(3.6, floorY(3), -D / 2 + 0.45);
-  sofa(-3.2, floorY(3), 2.3, 0x8e6fb4, Math.PI); plant(4.4, floorY(3), 2.6, 0.9);
-  box(2.2, 1.2, 0.06, std(0xfafafa, { emissive: 0x222222 }), 0, floorY(2) + 1.75, -D / 2 + 0.2); // 白板
-  sofa(-3.4, floorY(1), 2.2, 0xd98a6a, Math.PI); sofa(3.6, floorY(1), -2.4, 0x6f9fd9);
+  // 休息區：3F 左側沙發；2F 中央沙發＋兩張單人椅＋咖啡吧；1F 左側沙發＋單人椅
+  sofa(-3.4, floorY(3), 0.55, 0x8e6fb4); coffeeTable(-3.4, floorY(3), 1.65, 0.45); plant(-1.9, floorY(3), 0.3, 0.7); plant(4.6, floorY(3), -1.6, 0.9);
+  sofa(0, floorY(2), -0.95, 0x6f9fd9); armchair(-1.75, floorY(2), 0.7, 0xe69a7a, 0.45); armchair(1.75, floorY(2), 0.7, 0xe69a7a, -0.45);
+  coffeeTable(0, floorY(2), 0.55, 0.5); coffeeBar(0, floorY(2), -D / 2 + 0.5);
+  box(2.0, 1.1, 0.06, std(0xfafafa, { emissive: 0x222222 }), -3.5, floorY(2) + 1.75, -D / 2 + 0.2); // 白板
+  sofa(-3.65, floorY(1), 0.55, 0xd98a6a); armchair(-2.05, floorY(1), 1.5, 0x6f9fd9, -0.5); coffeeTable(-3.65, floorY(1), 1.65, 0.45);
   box(2.6, 1.0, 0.7, std(0xf2e8da), 0.6, floorY(1) + 0.5, -2.6); // 接待櫃台
   box(2.7, 0.06, 0.8, std(0x3b3856), 0.6, floorY(1) + 1.03, -2.6);
   const door = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.4), new THREE.MeshPhysicalMaterial({ color: 0xffe2b8, transparent: true, opacity: 0.25, emissive: 0xffc98f, emissiveIntensity: 0.3, side: THREE.DoubleSide }));
@@ -200,10 +306,8 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   // ===== 人物 =====
   const figures = new Map();
   let extraCount = 0;
-  const eyeMat = new THREE.MeshBasicMaterial({ color: 0x241c33 });
-  const blushMat = new THREE.MeshBasicMaterial({ color: 0xffa9a0, transparent: true, opacity: 0.7 });
 
-  function buildFigure(key, floor, x, z, isLead) {
+  function buildFigure(key, floor, x, z, isLead, lounge) {
     const grp = new THREE.Group(); grp.position.set(x, floorY(floor), z); scene.add(grp);
     const s = add(new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.2), blobMat), grp, false, false); s.rotation.x = -Math.PI / 2; s.position.set(0, 0.012, 0.15);
     // 桌子在人物前方（+z，朝預設鏡頭），人物面向鏡頭
@@ -216,6 +320,9 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     box(0.5, 0.025, 0.34, legMat, -0.05, 0.79, 0.5, grp);
     const lid = box(0.5, 0.32, 0.02, screenMat, -0.05, 0.95, 0.68, grp); lid.rotation.x = 0.25;
     const lidBack = box(0.52, 0.34, 0.012, std(0xc8c4d8, { metalness: 0.4, roughness: 0.3 }), -0.05, 0.95, 0.695, grp); lidBack.rotation.x = 0.25;
+    // 桌燈（夜晚會亮）
+    box(0.03, 0.34, 0.03, legMat, dw / 2 - 0.18, 0.95, 0.72, grp);
+    const bulb = box(0.18, 0.06, 0.12, deskLampMat, dw / 2 - 0.25, 1.12, 0.7, grp); bulb.castShadow = false;
     // 桌面小物：杯子、小盆栽
     box(0.09, 0.12, 0.09, std(0xff9e7a), dw / 2 - 0.3, 0.84, 0.4, grp);
     const mini = add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.1, 0), leafMat), grp); mini.position.set(-dw / 2 + 0.28, 0.92, 0.42);
@@ -226,24 +333,15 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     add(new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 6), legMat), grp).position.set(0, 0.24, -0.25);
     add(new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.04, 5), legMat), grp).position.set(0, 0.03, -0.25);
 
-    const bodyMat = std(0x888888, { roughness: 0.5 });
-    const skinMat = std(PAL.skin, { roughness: 0.75 });
-    const person = new THREE.Group(); person.position.set(0, 0, -0.22); grp.add(person);
-    const body = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.23, 0.32, 2, 8), bodyMat), person); body.position.y = 0.86;
-    const head = new THREE.Group(); head.position.y = 1.42; person.add(head);
-    add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.25, 1), skinMat), head);
-    const hair = add(new THREE.Mesh(new THREE.SphereGeometry(0.265, 10, 5, 0, Math.PI * 2, 0, Math.PI * 0.42), bodyMat), head); hair.position.set(0, 0.03, -0.02); hair.rotation.x = -0.35;
-    for (const ex of [-0.085, 0.085]) {
-      const e = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 4), eyeMat); e.position.set(ex, 0.0, 0.225); head.add(e);
-      const b = new THREE.Mesh(new THREE.CircleGeometry(0.04, 8), blushMat); b.position.set(ex * 1.55, -0.07, 0.218); b.rotation.y = ex > 0 ? 0.4 : -0.4; head.add(b);
-    }
-    const armL = add(new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.32, 2, 6), bodyMat), person); armL.rotation.x = Math.PI / 2 - 0.25; armL.position.set(-0.27, 0.9, 0.2);
-    const armR = armL.clone(); armR.position.x = 0.27; person.add(armR);
-    let orn = ornament('', bodyMat); orn.position.y = 0.33; head.add(orn);
+    const walker = new THREE.Group(); scene.add(walker);
+    const slot = new THREE.Group(); walker.add(slot);
+    const deskSeat = { pos: new THREE.Vector3(x, floorY(floor), z - 0.22), rot: 0, kind: 'desk', side: x < 0 ? 1 : -1 };
+    const loungeSeat = { pos: new THREE.Vector3(lounge[0], floorY(floor) - 0.07, lounge[1] + 0.02), rot: lounge[2] || 0, kind: 'lounge' };
+    walker.position.copy(loungeSeat.pos); walker.rotation.y = loungeSeat.rot;
     // 狀態光環
     const ringMat = new THREE.MeshBasicMaterial({ color: 0x8a94a6, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
-    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.64, 28), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.set(0, 0.02, -0.22); grp.add(ring);
-    const hit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.0, 1.8), new THREE.MeshBasicMaterial({ visible: false })); hit.position.set(0, 1, 0.1); hit.userData.key = key; grp.add(hit);
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.64, 28), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.set(0, 0.03, 0); walker.add(ring);
+    const hit = new THREE.Mesh(new THREE.BoxGeometry(1.6, 2.0, 1.8), new THREE.MeshBasicMaterial({ visible: false })); hit.position.set(0, 1, 0.1); hit.userData.key = key; walker.add(hit);
 
     // HTML 名牌 + 狀態泡泡（全部以 textContent 寫入）
     const el = document.createElement('button'); el.type = 'button'; el.className = 'tag';
@@ -261,9 +359,8 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     el.addEventListener('click', (ev) => { ev.stopPropagation(); onSelect && onSelect(key); });
     overlay.appendChild(el);
 
-    const anchor = new THREE.Vector3(x, floorY(floor) + 2.05 + (z < -1 ? 0.25 : 0), z - 0.2);
-    const fig = { key, grp, person, head, body, armL, armR, bodyMat, ringMat, ring, screenMat, hit, el, fx, dot, nm, st, step, anchor, status: '', shape: null, phase: Math.random() * 6,
-      get orn() { return orn; }, set orn(v) { orn = v; } };
+    const anchor = new THREE.Vector3();
+    const fig = { key, grp, slot, walker, deskSeat, loungeSeat, atDesk: false, want: false, busy: false, moving: false, carry: null, walk: null, floor, floorBase: floorY(floor), av: null, avSet: null, color: null, ringMat, ring, screenMat, hit, el, fx, dot, nm, st, step, anchor, status: '', shape: null, phase: Math.random() * 6 };
     figures.set(key, fig);
     return fig;
   }
@@ -271,10 +368,11 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   function ensureFigure(state, key) {
     if (figures.has(key)) return figures.get(key);
     const meta = botMeta(state, key);
-    if (meta.floor) { const [x, z] = SEATS[key]; return buildFigure(key, meta.floor, x, z, key === 'nori'); }
+    if (meta.floor) { const [x, z] = SEATS[key]; return buildFigure(key, meta.floor, x, z, key === 'nori', LOUNGE[key]); }
     if (extraCount >= EXTRA_SEATS.length) return null;
-    const [x, z] = EXTRA_SEATS[extraCount++];
-    return buildFigure(key, 1, x, z, false);
+    const i = extraCount++;
+    const [x, z] = EXTRA_SEATS[i];
+    return buildFigure(key, 1, x, z, false, EXTRA_LOUNGE[i]);
   }
   for (const b of BOTS) ensureFigure({ extras: {}, looks: {} }, b.key);
 
@@ -288,25 +386,190 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     else if (status === 'done') fig.fx.append(mk('fx-ok', '✓'));
   }
 
+  // 走路：工作中回辦公桌，其他狀態去休息區；剛載入時直接就位不走路
+  const bornAt = performance.now();
+  function moveTo(fig, toDesk) {
+    fig.atDesk = toDesk;
+    const from = fig.walker.position.clone();
+    const seat = toDesk ? fig.deskSeat : fig.loungeSeat;
+    if (performance.now() - bornAt < 4000 || document.hidden) {
+      fig.walk = null; fig.walker.position.copy(seat.pos); fig.walker.rotation.y = seat.rot; return;
+    }
+    const fromSeat = toDesk ? fig.loungeSeat : fig.deskSeat;
+    const pts = [from, seatFront(fromSeat), seatFront(seat), seat.pos.clone()];
+    const lens = []; let total = 0;
+    for (let i = 1; i < pts.length; i++) { const l = pts[i].distanceTo(pts[i - 1]); lens.push(l); total += l; }
+    fig.walk = { pts, lens, total, t0: performance.now(), ms: WALK_MS, rot: seat.rot };
+    start();
+  }
+  function stepWalk(f, now) {
+    const w = f.walk; const k = Math.min(1, (now - w.t0) / w.ms);
+    const e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
+    let d = e * w.total, i = 0;
+    while (i < w.lens.length - 1 && d > w.lens[i]) { d -= w.lens[i]; i++; }
+    const p0 = w.pts[i], p1 = w.pts[i + 1], u = w.lens[i] ? Math.min(1, d / w.lens[i]) : 1;
+    f.walker.position.lerpVectors(p0, p1, u);
+    const dx = p1.x - p0.x, dz = p1.z - p0.z;
+    if (k < 0.92 && Math.hypot(dx, dz) > 0.05) {
+      const target = Math.atan2(dx, dz); let cur = f.walker.rotation.y;
+      let diff = ((target - cur + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      f.walker.rotation.y = cur + diff * 0.25;
+    } else {
+      let diff = ((w.rot - f.walker.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+      f.walker.rotation.y += diff * 0.3;
+    }
+    f.walker.position.y += Math.abs(Math.sin(k * Math.PI * 7)) * 0.06 + Math.sin(k * Math.PI) * 0.12; // 站起來＋腳步起伏
+    if (k >= 1) { f.walk = null; f.walker.position.copy(w.pts[w.pts.length - 1]); f.walker.rotation.y = w.rot; }
+    return k;
+  }
+
+  // ===== 送資料動畫：走樓梯或搭電梯到對方座位，交付後回座 =====
+  const P = (x, f, z) => new THREE.Vector3(x, floorY(f), z);
+  function seatFront(seat) {
+    if (seat.kind === 'desk') return new THREE.Vector3(seat.pos.x + seat.side * 1.1, seat.pos.y, seat.pos.z);
+    return new THREE.Vector3(seat.pos.x + Math.sin(seat.rot) * 0.8, seat.pos.y + 0.07, seat.pos.z + Math.cos(seat.rot) * 0.8);
+  }
+  const tasks = new Set();
+  const task = (fn) => new Promise((res) => { tasks.add({ fn, res }); start(); });
+  const wait = (ms) => { const t0 = performance.now(); return task((now) => now - t0 >= ms); };
+  const tween = (ms, fn) => { const t0 = performance.now(); return task((now) => { const k = Math.min(1, (now - t0) / ms); fn(k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2); return k >= 1; }); };
+  function walk(f, pts, speed = WALK_SPEED) {
+    pts = [f.walker.position.clone(), ...pts];
+    const lens = []; let total = 0;
+    for (let i = 1; i < pts.length; i++) { const l = pts[i].distanceTo(pts[i - 1]); lens.push(l); total += l; }
+    if (total < 0.01) return Promise.resolve();
+    const t0 = performance.now(); f.moving = true;
+    return task((now) => {
+      let d = Math.min(total, (now - t0) / 1000 * speed), rem = d, i = 0;
+      while (i < lens.length - 1 && rem > lens[i]) { rem -= lens[i]; i++; }
+      const a = pts[i], b = pts[i + 1], u = lens[i] ? Math.min(1, rem / lens[i]) : 1;
+      f.walker.position.lerpVectors(a, b, u);
+      f.walker.position.y += 0.1 + Math.abs(Math.sin(d * 4.2)) * 0.05;
+      const dx = b.x - a.x, dz = b.z - a.z;
+      if (Math.hypot(dx, dz) > 0.05) { const tr = Math.atan2(dx, dz); const df = ((tr - f.walker.rotation.y + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; f.walker.rotation.y += df * 0.25; }
+      if (d >= total) { f.walker.position.copy(pts[pts.length - 1]); f.walker.position.y += 0.1; f.moving = false; return true; }
+      return false;
+    });
+  }
+  function turnTo(f, rot, ms = 300) { const r0 = f.walker.rotation.y; const df = ((rot - r0 + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; return tween(ms, (e) => { f.walker.rotation.y = r0 + df * e; }); }
+  const elevTo = (fl) => { const y0 = elev.y, y1 = floorY(fl); if (Math.abs(y1 - y0) < 0.01) return Promise.resolve(); return tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (e) => { elev.y = y0 + (y1 - y0) * e; applyElev(); }); };
+  const doors = (open) => { const d0 = elev.door, d1 = open ? 1 : 0; return tween(420, (e) => { elev.door = d0 + (d1 - d0) * e; applyElev(); }); };
+  function rideElevator(f, fa, fb) {
+    const run = async () => {
+      await elevTo(fa); await doors(true);
+      await walk(f, [P(ELEV_X, fa, 0)], 1.6); await turnTo(f, -Math.PI / 2);
+      await doors(false);
+      const off = f.walker.position.y - elev.y;
+      const y0 = elev.y, y1 = floorY(fb);
+      await tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (e) => { elev.y = y0 + (y1 - y0) * e; applyElev(); f.walker.position.y = elev.y + off; });
+      await doors(true);
+      await walk(f, [P(ELEV_DOOR_X, fb, 0)], 1.6);
+      doors(false);
+    };
+    const p = elev.lock.then(run); elev.lock = p.catch(() => { }); return p;
+  }
+  function stairsRoute(fa, fb) {
+    const pts = [];
+    const exit = (fl) => stairZ(fl) > 0 ? [P(LANE_L, fl, AISLE), P(STAIR_X, fl, AISLE)] : [P(LANE_L, fl, AISLE), P(LANE_L, fl, stairZ(fl)), P(STAIR_X, fl, stairZ(fl))];
+    pts.push(...exit(fa));
+    const step = fb > fa ? 1 : -1;
+    for (let fl = fa; fl !== fb; fl += step) {
+      const z1 = stairZ(fl), z2 = stairZ(fl + step), dir = Math.sign(z2 - z1);
+      pts.push(P(STAIR_X, fl, z1 + dir * 0.7), P(STAIR_X, fl + step, z2 - dir * 0.7), P(STAIR_X, fl + step, z2));
+    }
+    pts.push(...exit(fb).reverse());
+    return pts;
+  }
+  async function travel(f, fa, fromSeat, fb, toPoint, mode) {
+    const fr = seatFront(fromSeat);
+    await walk(f, [fr, P(fr.x, fa, AISLE)]);
+    if (fa !== fb) {
+      if (mode === 'stairs') await walk(f, stairsRoute(fa, fb), 2.4);
+      else { await walk(f, [P(LANE_R, fa, AISLE), P(LANE_R, fa, 0), P(ELEV_DOOR_X, fa, 0)]); await rideElevator(f, fa, fb); await walk(f, [P(LANE_R, fb, 0), P(LANE_R, fb, AISLE)]); }
+    }
+    await walk(f, [P(toPoint.x, fb, AISLE), toPoint]);
+  }
+  const docGeo = new THREE.BoxGeometry(0.34, 0.05, 0.26), paperGeo = new THREE.BoxGeometry(0.28, 0.02, 0.22);
+  const docMat = std(0xffc861, { roughness: 0.5 }), paperMat = std(0xffffff, { roughness: 0.8 });
+  function makeDoc() { const g = new THREE.Group(); const a = new THREE.Mesh(docGeo, docMat); a.castShadow = true; g.add(a); const b = new THREE.Mesh(paperGeo, paperMat); b.position.y = 0.035; g.add(b); g.rotation.x = -0.5; return g; }
+  async function deliver(fromKey, toKey, mode = 'auto') {
+    const a = figures.get(fromKey), b = figures.get(toKey);
+    if (!a || !b || a === b || a.busy || !a.av) return false;
+    a.busy = true; a.walk = null;
+    try {
+      const fa = a.floor, fb = b.floor;
+      if (mode !== 'stairs' && mode !== 'elevator') mode = Math.abs(fa - fb) >= 2 ? 'elevator' : (Math.random() < 0.5 ? 'stairs' : 'elevator');
+      const doc = makeDoc(); doc.position.set(0, 1.0, 0.42); a.walker.add(doc); a.carry = doc; a.dirty = true;
+      const startSeat = a.atDesk ? a.deskSeat : a.loungeSeat;
+      const bSeat = b.atDesk ? b.deskSeat : b.loungeSeat;
+      const meet = seatFront(bSeat);
+      await travel(a, fa, startSeat, fb, meet, mode);
+      await turnTo(a, Math.atan2(b.walker.position.x - a.walker.position.x, b.walker.position.z - a.walker.position.z));
+      // 交付：文件飛到對方手上
+      const wp = new THREE.Vector3(); doc.getWorldPosition(wp); a.walker.remove(doc); scene.add(doc); doc.position.copy(wp); a.carry = null;
+      const target = b.walker.position.clone().add(new THREE.Vector3(0, 1.0, 0));
+      await tween(650, (e) => { doc.position.lerpVectors(wp, target, e); doc.position.y += Math.sin(e * Math.PI) * 0.3; });
+      scene.remove(doc);
+      b.el.classList.add('got'); setTimeout(() => b.el.classList.remove('got'), 2600);
+      await wait(700);
+      // 回座（工作中回辦公桌，其他回休息區）
+      const home = a.want ? a.deskSeat : a.loungeSeat;
+      const homeFront = seatFront(home);
+      await travel(a, fb, bSeat, fa, homeFront, mode);
+      await walk(a, [home.pos.clone()], 1.6);
+      a.walker.position.copy(home.pos); await turnTo(a, home.rot, 250);
+      a.atDesk = a.want;
+      return true;
+    } finally {
+      a.busy = false; a.moving = false; if (a.carry) { a.walker.remove(a.carry); a.carry = null; }
+      if (a.want !== a.atDesk) moveTo(a, a.want);
+    }
+  }
+
+  // ===== 白天／夜晚 =====
+  let theme = 'night';
+  function setTheme(t) {
+    theme = t === 'day' ? 'day' : 'night';
+    const day = theme === 'day';
+    hemi.color.set(day ? 0xfff4e6 : 0x9aa6d6); hemi.groundColor.set(day ? 0x8a9a7a : 0x1c1a33); hemi.intensity = day ? 1.35 : 0.55;
+    sun.color.set(day ? 0xfff0d8 : 0x9fb2ff); sun.intensity = day ? 2.6 : 0.55;
+    sun.position.set(day ? 12 : -10, 26, 16);
+    rim.color.set(day ? 0xcfe2ff : 0x6f86ff); rim.intensity = day ? 0.5 : 0.35;
+    scene.fog.color.set(day ? 0xcfe3f6 : 0x1a1830);
+    for (const l of floorLights) l.intensity = day ? 4 : 16;
+    lampMat.emissiveIntensity = day ? 0.5 : 2.2;
+    deskLampMat.emissiveIntensity = day ? 0.15 : 2.4;
+    cityMat.color.set(day ? 0xb8c6d8 : 0x2a2f45); cityMat.emissiveIntensity = day ? 0 : 1.2;
+    groundMat.color.set(day ? 0x9fc08a : 0x24223a); padMat.color.set(day ? 0xd8d1c4 : 0x302d4a);
+    stars.visible = moon.visible = !day; sunDisc.visible = day;
+    renderer.toneMappingExposure = day ? 1.0 : 1.08;
+    for (const f of figures.values()) f.screenMat.userData.night = !day;
+  }
+  setTheme('night');
+
   let selected = null;
   function update(state) {
     for (const key of [...BOTS.map(b => b.key), ...Object.keys(state.extras)]) {
       const fig = ensureFigure(state, key); if (!fig) continue;
       const meta = botMeta(state, key);
       const hex = lookColor(state, key);
-      const col = new THREE.Color(hex);
-      fig.bodyMat.color.copy(col);
-      const lum = col.r * 0.3 + col.g * 0.59 + col.b * 0.11;
-      if (lum < 0.08) { fig.bodyMat.color.setRGB(0.07, 0.07, 0.1); fig.bodyMat.emissive.setRGB(0.05, 0.05, 0.08); } else fig.bodyMat.emissive.setRGB(0, 0, 0);
       const shape = state.looks[key]?.shape || '';
-      if (shape !== fig.shape) { fig.head.remove(fig.orn); const o = ornament(shape, fig.bodyMat); o.position.y = 0.33; o.traverse(m => { m.castShadow = true; }); fig.head.add(o); fig.orn = o; fig.shape = shape; }
+      if (!fig.av || fig.avSet !== currentSet || (usesShape(currentSet) && shape !== fig.shape)) {
+        if (fig.av) disposeAvatar(fig.av);
+        fig.av = buildAvatar(currentSet, shape); fig.slot.add(fig.av.root);
+        fig.avSet = currentSet; fig.shape = shape; fig.color = null;
+      }
+      if (fig.color !== hex) { tintAvatar(fig.av, hex); fig.color = hex; }
       const s = state.bots[key];
       const status = s ? s.status : 'unknown';
       const sc = STATUS[status];
       if (status !== fig.status) { setFx(fig, status); fig.status = status; }
+      const wantDesk = status === 'working';
+      fig.want = wantDesk;
+      if (!fig.busy && wantDesk !== fig.atDesk) moveTo(fig, wantDesk);
       fig.ringMat.color.set(sc.color);
       fig.screenMat.emissive.set(status === 'error' ? '#ff5d6c' : '#6bb4ff');
-      fig.screenMat.emissiveIntensity = status === 'working' ? 1.2 : (status === 'idle' || status === 'unknown' ? 0.05 : 0.35);
+      fig.screenMat.emissiveIntensity = (status === 'working' ? 1.2 : (status === 'idle' || status === 'unknown' ? 0.05 : 0.35)) * (theme === 'night' ? 1.6 : 1);
       fig.dot.style.background = hex;
       fig.nm.textContent = meta.short;
       fig.st.textContent = sc.label;
@@ -341,8 +604,8 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     const vfov = THREE.MathUtils.degToRad(camera.fov) * (usableH / h);
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
     const az = THREE.MathUtils.degToRad(aspect < 0.9 ? 15 : 24), polar = THREE.MathUtils.degToRad(66);
-    const effW = W * Math.cos(az) + D * Math.sin(az) - (aspect < 0.9 ? 0.8 : -0.6);
-    const effH = (2 * FLOOR_H + WALL_H + 0.6) * Math.sin(polar) + D * Math.cos(polar) + 1.2;
+    const effW = (W + 3.4) * Math.cos(az) + D * Math.sin(az) - (aspect < 0.9 ? 0.9 : -0.6);
+    const effH = (2 * FLOOR_H + WALL_H + 0.6) * Math.sin(polar) + D * Math.cos(polar) + 2.6;
     const dist = Math.max((effH / 2) / Math.tan(vfov / 2), (effW / 2) / Math.tan(hfov / 2)) + D * 0.35;
     // 依可用區域的中心偏移目標點，避免被頁首或抽屜擋住
     const shiftPx = (insets.bottom - insets.top) / 2;
@@ -394,7 +657,7 @@ export function createOffice(container, overlay, { onSelect } = {}) {
     const placed = [];
     for (const it of list) {
       const [tw, th] = it.f.size;
-      let x0 = it.x - tw / 2, y1 = it.y, lift = 0;
+      let x0 = Math.max(6, Math.min(w - tw - 6, it.x - tw / 2)), y1 = it.y, lift = 0;
       for (let pass = 0; pass < 6; pass++) {
         const hit = placed.find(r => x0 < r.x1 - 2 && x0 + tw > r.x0 + 2 && (y1 - lift) - th < r.y1 - 2 && (y1 - lift) > r.y0 + 2);
         if (!hit) break;
@@ -419,26 +682,42 @@ export function createOffice(container, overlay, { onSelect } = {}) {
       camera.position.lerpVectors(fly.p0, fly.p1, e); controls.target.lerpVectors(fly.t0v, fly.t1, e);
       if (k >= 1) fly = null;
     }
+    const nowMs = performance.now();
+    for (const tk of [...tasks]) { if (tk.fn(nowMs)) { tasks.delete(tk); tk.res(); } }
     for (const f of figures.values()) {
       const p = t + f.phase;
-      const breathe = Math.sin(p * 1.6) * 0.012;
-      f.body.scale.set(1 + breathe, 1 - breathe * 0.6, 1 + breathe);
+      const av = f.av; if (!av) continue;
+      if (f.walk) stepWalk(f, performance.now());
+      const walking = !!f.walk || f.moving;
+      f.anchor.set(f.walker.position.x, f.walker.position.y + 2.05 + (f.walker.position.z < -0.6 ? 0.25 : 0), f.walker.position.z + 0.02);
+      if (f.carry !== null && !f.el.classList.contains('carrying')) f.el.classList.add('carrying');
+      if (f.carry === null && f.el.classList.contains('carrying')) f.el.classList.remove('carrying');
+      const breathe = Math.sin(p * 1.6) * (av.glossy ? 0.03 : 0.012);
+      av.body.scale.set(1 + breathe, 1 - breathe * 0.6, 1 + breathe);
+      const hy = av.headY, ay = av.armY;
+      let la = ay, ra = ay;
       if (f.status === 'working') {
-        f.armL.position.y = 0.9 + Math.max(0, Math.sin(p * 14)) * 0.035; f.armR.position.y = 0.9 + Math.max(0, Math.sin(p * 14 + 1.6)) * 0.035;
-        f.head.rotation.set(0.12 + Math.sin(p * 1.3) * 0.04, Math.sin(p * 0.7) * 0.12, 0); f.head.position.y = 1.42;
+        la = ay + Math.max(0, Math.sin(p * 14)) * 0.035; ra = ay + Math.max(0, Math.sin(p * 14 + 1.6)) * 0.035;
+        av.head.rotation.set(0.12 + Math.sin(p * 1.3) * 0.04, Math.sin(p * 0.7) * 0.12, 0); av.head.position.y = hy;
       } else if (f.status === 'idle') {
-        f.armL.position.y = f.armR.position.y = 0.9;
-        f.head.rotation.set(0.32 + Math.sin(p * 0.9) * 0.04, 0, 0.18); f.head.position.y = 1.39;
+        av.head.rotation.set(0.3 + Math.sin(p * 0.9) * 0.04, 0, 0.18); av.head.position.y = hy - 0.03;
       } else if (f.status === 'waiting_user') {
-        f.armL.position.y = f.armR.position.y = 0.9;
-        f.head.rotation.set(-0.1, Math.sin(p * 1.1) * 0.35, Math.sin(p * 0.8) * 0.1); f.head.position.y = 1.43 + Math.abs(Math.sin(p * 2.2)) * 0.02;
+        av.head.rotation.set(-0.1, Math.sin(p * 1.1) * 0.35, Math.sin(p * 0.8) * 0.1); av.head.position.y = hy + 0.01 + Math.abs(Math.sin(p * 2.2)) * 0.03;
+        ra = ay + 0.12 + Math.abs(Math.sin(p * 2.2)) * 0.05;   // 舉手
       } else if (f.status === 'done') {
-        f.armL.position.y = f.armR.position.y = 0.9;
-        f.head.rotation.set(-0.05, 0, Math.sin(p * 2) * 0.08); f.head.position.y = 1.42;
-      } else {
-        f.armL.position.y = f.armR.position.y = 0.9; f.head.rotation.set(0, 0, 0); f.head.position.y = 1.42;
+        av.head.rotation.set(-0.05, 0, Math.sin(p * 2) * 0.08); av.head.position.y = hy + Math.abs(Math.sin(p * 3)) * 0.02;
+      } else if (f.status === 'error') {
+        av.head.rotation.set(0, Math.sin(p * 9) * 0.06, 0); av.head.position.y = hy;
+      } else { av.head.rotation.set(0, 0, 0); av.head.position.y = hy; }
+      if (walking) { // 走路時手前後擺、頭擺正
+        const sw = Math.sin(t * 11 + f.phase) * 0.05;
+        la = ay + sw; ra = ay - sw; av.head.rotation.set(0, 0, sw); av.head.position.y = av.headY;
       }
-      f.orn.rotation.y = t * 0.8;
+      if (f.carry) { la = ra = ay + 0.1; }
+      if (av.armL) av.armL.position.y = la;
+      if (av.armR) av.armR.position.y = ra;
+      if (av.spin) av.spin.rotation.y = t * 0.8;
+      if (av.tail) av.tail.rotation.y = Math.sin(p * 1.8) * 0.35;
       const r = f.status === 'error' ? 0.45 + 0.55 * Math.abs(Math.sin(t * 3.5)) : (f.status === 'working' ? 0.65 + 0.3 * Math.sin(t * 2.6 + f.phase) : 0.7);
       f.ringMat.opacity = r;
       const sc = f.status === 'error' ? 1 + 0.15 * Math.abs(Math.sin(t * 3.5)) : 1;
@@ -457,7 +736,9 @@ export function createOffice(container, overlay, { onSelect } = {}) {
   if (container.clientWidth) { framed = true; intro(); }
   start();
 
-  return { update, select, resetView, setInsets };
+  function setAvatarSet(id, state) { currentSet = id; if (state) update(state); }
+  const floorOf = (k) => figures.get(k)?.floor || 0;
+  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf };
 }
 
 export function webglAvailable() {
