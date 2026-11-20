@@ -214,8 +214,6 @@ body.no3d .handle, body.no3d .stage-tools, body.no3d .hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 /* 被避讓推高的名牌：用細線連回人物 */
-.tag.lifted .tag-tail { display: none; }
-.tag.lifted::after { content: ""; position: absolute; left: 50%; top: 100%; width: 1.5px; height: var(--lift, 0px); background: linear-gradient(rgba(255,255,255,.55), rgba(255,255,255,.1)); transform: translateX(-50%); pointer-events: none; }
 .detail { position: relative; }
 .closebtn { position: absolute; right: 8px; top: 8px; width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--line); background: rgba(255,255,255,.08); cursor: pointer; font-size: 12px; }
 @media (max-width: 899px) { .drawer { height: calc(100svh - var(--header-h) - 4px); } }
@@ -269,3 +267,20 @@ body[data-theme="day"] .hint { color: #1d2740; text-shadow: 0 1px 6px rgba(255,2
 @media (min-width: 900px) { .drawer[data-state="peek"] .drawer-body { opacity: 1; pointer-events: auto; } }
 @media (max-width: 380px) { .conn b { font-size: 11px; } .themebtn { padding: 5px 8px; } }
 .tag-bubble { position: relative; }
+
+/* ---- 名牌：樓層標記；手機精簡版（樓層＋狀態圓點＋名字，點一下看詳情） ---- */
+.tag-floor { display: none; font-size: 9.5px; font-weight: 800; letter-spacing: .02em; color: #14132a; background: var(--floor); border-radius: 5px; padding: 0 4px; line-height: 15px; }
+.tag.shifted .tag-tail { opacity: 0; }
+.tag.stale .tag-bubble { opacity: .8; }
+.compact .tag-bubble { padding: 3px 7px 3px 4px; border-radius: 9px; max-width: 120px; border-left: 3px solid var(--floor); }
+.compact .tag-floor { display: inline-block; }
+.compact .tag-row { gap: 4px; }
+.compact .tag-dot { width: 8px; height: 8px; background: var(--stc) !important; box-shadow: 0 0 0 2px rgba(255,255,255,.2), 0 0 6px var(--stc); }
+.compact .tag-name { font-size: 11.5px; }
+.compact .tag:not(.sel) .tag-status, .compact .tag:not(.sel) .tag-step { display: none; }
+.compact .tag-tail { width: 6px; height: 6px; margin-top: -4px; }
+.compact .tag-fx { top: -8px; right: -6px; font-size: 11px; }
+.tag.squeeze .tag-name { max-width: 3.2em; overflow: hidden; text-overflow: ellipsis; }
+.tag.squeeze .tag-step { display: none; }
+.bot.stale { opacity: .78; }
+.compact .tag.carrying .tag-bubble::before, .compact .tag.got .tag-bubble::before { top: -12px; font-size: 9px; }
