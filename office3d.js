@@ -914,6 +914,12 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     for (const a of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2, -3, 3]) for (const b of [0, -1, 1, -2, 2]) out.push([a * sx, b * sy, Math.hypot(a * sx, b * sy * 1.3)]);
     return out.sort((p, q) => p[2] - q[2]);
   };
+  // 手機候選格更密（含半格上下），旋轉時才有足夠位置避開四位聚在 2F 休息區的名牌
+  const MOBILE_CANDS = (sx, sy) => {
+    const out = [];
+    for (const a of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2, -2.5, 2.5, -3, 3]) for (const b of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2]) out.push([a * sx, b * sy, Math.hypot(a * sx, b * sy * 1.3)]);
+    return out.sort((p, q) => p[2] - q[2]);
+  };
   function placeTags() {
     const w = container.clientWidth, h = container.clientHeight;
     const list = [];
@@ -925,35 +931,81 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       if (!f.size || f.dirty) { f.el.classList.remove('squeeze'); f.size = [f.el.offsetWidth, f.el.offsetHeight]; f.dirty = false; }
       list.push({ f, z: v.z, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h, band: bandOf(f, w, h) });
     }
-    // 名牌避讓：選取中的先放，其次離鏡頭近的；重疊時優先往左右挪，
-    // 再在本層範圍內上下挪；真的放不下就縮成只剩圓點＋名字
+    // 名牌避讓：選取中的先放，其次離鏡頭近的；先用候選格，再每幀做螢幕空間迭代分離，
+    // 並夾在本層垂直範圍與畫面內。真的放不下就縮成只剩圓點＋名字
     list.sort((a, b) => (b.f.key === selected) - (a.f.key === selected) || a.z - b.z);
-    const placed = [];
+    // 右上角狀態小圖示（tag-fx）會超出名牌外框；手機精簡名牌同樣會溢出，比對時上、右各留 PAD
+    const PAD = compactTags ? 8 : 10;
+    const items = [];
     for (const it of list) {
       const [tw, th] = it.f.size;
       const [bTop, bBot] = it.band;
       const clampY = (bottom) => Math.max(bTop + th, Math.min(Math.max(bTop + th, bBot), bottom));
       const sx = tw * 0.55 + 4, sy = th + 4;
-      // 手機（compactTags）維持原本的候選位置；桌機改用較密、較寬的候選格，依距離由近到遠，第一個完全不重疊的就用
-      const cands = compactTags ? [[0, 0], [-sx, 0], [sx, 0], [0, -sy], [-sx, -sy], [sx, -sy], [0, sy], [-sx, sy], [sx, sy], [-2 * sx, 0], [2 * sx, 0], [0, 2 * sy], [-sx, 2 * sy], [sx, 2 * sy], [-2 * sx, sy], [2 * sx, sy]] : DESK_CANDS(sx, sy);
-      // 桌機：名牌右上角的狀態小圖示（tag-fx）會超出名牌外框，比對重疊時上、右各多留 PAD
-      const PAD = compactTags ? 0 : 10;
+      // 手機改與桌機一樣用較密的候選格，旋轉時每一幀重新找位置
+      const cands = compactTags ? MOBILE_CANDS(sx, sy) : DESK_CANDS(sx, sy);
       let best = null;
       for (const [dx, dy] of cands) {
-        const x0 = Math.max(4, Math.min(w - tw - 4 - PAD, it.x - tw / 2 + dx));
+        const x0 = Math.max(4, Math.min(w - tw - 4, it.x - tw / 2 + dx));
         const y1 = clampY(it.y + dy);
         const r = { x0, x1: x0 + tw + PAD, y0: y1 - th - PAD, y1 };
-        let ov = 0; for (const p of placed) ov += overlapArea(r, p);
+        let ov = 0; for (const p of items) ov += overlapArea(r, p.r);
         const cost = ov * 200 + Math.abs(x0 + tw / 2 - it.x) + Math.abs(y1 - it.y) * 1.3;
         if (!best || cost < best.cost) best = { r, cost, ov };
-        if (ov === 0 && (!compactTags || (dx === 0 && dy === 0))) break;
+        if (ov === 0) break;
       }
-      const r = { ...best.r }; r.x1 -= PAD; r.y0 += PAD; placed.push(best.r);
-      it.f._tagBand = [bTop, bBot]; it.f._tagRect = [r.x0, r.y0, r.x1, r.y1];
-      it.f.el.classList.toggle('squeeze', best.ov > tw * th * 0.12 && !it.f.el.classList.contains('sel'));
-      it.f.el.style.transform = `translate3d(${r.x0.toFixed(1)}px, ${r.y0.toFixed(1)}px, 0)`;
-      const shifted = Math.abs(r.x0 + tw / 2 - it.x) > 6 || Math.abs(r.y1 - it.y) > 6;
-      it.f.el.classList.toggle('shifted', shifted);
+      items.push({ it, tw, th, r: best.r, ov: best.ov });
+    }
+    const slackX = (obj, dir) => dir < 0 ? Math.max(0, obj.r.x0 - 4) : Math.max(0, (w - obj.tw - 4) - obj.r.x0);
+    const slackY = (obj, dir) => {
+      const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
+      return dir < 0 ? Math.max(0, obj.r.y1 - minB) : Math.max(0, maxB - obj.r.y1);
+    };
+    const clampItem = (obj) => {
+      const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
+      const x0 = Math.max(4, Math.min(w - obj.tw - 4, obj.r.x0));
+      const y1 = Math.max(minB, Math.min(maxB, obj.r.y1));
+      obj.r = { x0, x1: x0 + obj.tw + PAD, y0: y1 - obj.th - PAD, y1 };
+    };
+    const shift = (obj, dx, dy) => { obj.r.x0 += dx; obj.r.x1 += dx; obj.r.y0 += dy; obj.r.y1 += dy; clampItem(obj); };
+    // 迭代分離：有空間就沿重疊較小的軸推開；若該軸已被樓層／畫面擋住，改推另一軸
+    for (let iter = 0; iter < 32; iter++) {
+      let moved = false;
+      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+        const A = items[i], B = items[j];
+        const ox = Math.min(A.r.x1, B.r.x1) - Math.max(A.r.x0, B.r.x0);
+        const oy = Math.min(A.r.y1, B.r.y1) - Math.max(A.r.y0, B.r.y0);
+        if (ox <= 0 || oy <= 0) continue;
+        const selA = A.it.f.key === selected, selB = B.it.f.key === selected;
+        const dirX = (A.r.x0 + A.r.x1 <= B.r.x0 + B.r.x1) ? -1 : 1;
+        const dirY = (A.r.y0 + A.r.y1 <= B.r.y0 + B.r.y1) ? -1 : 1;
+        const needX = ox + 0.75, needY = oy + 0.75;
+        const sxA = slackX(A, dirX), sxB = slackX(B, -dirX), slX = sxA + sxB;
+        const syA = slackY(A, dirY), syB = slackY(B, -dirY), slY = syA + syB;
+        const preferX = ox < oy;
+        const useX = (preferX && slX > 0.01) || slY < 0.01;
+        if (useX && slX > 0.01) {
+          const take = Math.min(needX, slX);
+          const wA = selA && !selB ? 0 : (selB && !selA ? 1 : (sxA / slX));
+          shift(A, dirX * take * wA, 0); shift(B, -dirX * take * (1 - wA), 0);
+        } else if (slY > 0.01) {
+          const take = Math.min(needY, slY);
+          const wA = selA && !selB ? 0 : (selB && !selA ? 1 : (syA / slY));
+          shift(A, 0, dirY * take * wA); shift(B, 0, -dirY * take * (1 - wA));
+        } else continue;
+        moved = true;
+      }
+      if (!moved) break;
+    }
+    for (const obj of items) {
+      const r = { x0: obj.r.x0, x1: obj.r.x1 - PAD, y0: obj.r.y0 + PAD, y1: obj.r.y1 };
+      const [bTop, bBot] = obj.it.band;
+      let still = 0; for (const o of items) if (o !== obj) still += overlapArea(obj.r, o.r);
+      obj.it.f._tagBand = [bTop, bBot]; obj.it.f._tagRect = [r.x0, r.y0, r.x1, r.y1];
+      obj.it.f.el.classList.toggle('squeeze', still > obj.tw * obj.th * 0.12 && !obj.it.f.el.classList.contains('sel'));
+      obj.it.f.el.style.transform = `translate3d(${r.x0.toFixed(1)}px, ${r.y0.toFixed(1)}px, 0)`;
+      const shifted = Math.abs(r.x0 + obj.tw / 2 - obj.it.x) > 6 || Math.abs(r.y1 - obj.it.y) > 6;
+      obj.it.f.el.classList.toggle('shifted', shifted);
     }
     list.forEach((it, i) => { it.f.el.style.zIndex = String(it.f.key === selected ? 999 : 100 - i); });
   }
@@ -1070,7 +1122,14 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     return { checked: n, fails };
   };
   const tagBands = () => { const o = {}; for (const [k, f] of figures) if (f._tagRect) o[k] = { rect: f._tagRect.map(v => +v.toFixed(1)), band: f._tagBand.map(v => +v.toFixed(1)), floor: where(k).floor }; return o; };
-  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where, footProbe, bodyProbe, tagBands, pathCheck, footLog: footLogCtl };
+  // 唯讀檢查用：鏡頭位置與方位角（證明觸控拖曳真的有轉動鏡頭）
+  const camPose = () => {
+    const p = camera.position, t = controls.target, dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
+    const dist = Math.hypot(dx, dy, dz);
+    return { x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), tx: +t.x.toFixed(3), ty: +t.y.toFixed(3), tz: +t.z.toFixed(3), az: +Math.atan2(dx, dz).toFixed(4), polar: +Math.acos(Math.max(-1, Math.min(1, dist ? dy / dist : 0))).toFixed(4), dist: +dist.toFixed(3) };
+  };
+  window.__aiOfficeCam = camPose;
+  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where, footProbe, bodyProbe, tagBands, pathCheck, camPose, footLog: footLogCtl };
 }
 
 export function webglAvailable() {
