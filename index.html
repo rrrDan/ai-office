@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="zh-Hant-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#151629">
+<meta name="robots" content="noindex">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>AI 辦公室</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='10' y='6' width='44' height='54' rx='6' fill='%23ffb86b'/%3E%3Crect x='18' y='14' width='10' height='8' rx='2' fill='%23151629'/%3E%3Crect x='36' y='14' width='10' height='8' rx='2' fill='%23151629'/%3E%3Crect x='18' y='28' width='10' height='8' rx='2' fill='%23151629'/%3E%3Crect x='36' y='28' width='10' height='8' rx='2' fill='%23151629'/%3E%3Crect x='26' y='44' width='12' height='16' rx='2' fill='%23151629'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="sky" aria-hidden="true"><i class="glow g1"></i><i class="glow g2"></i></div>
+
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <div class="titles">
+      <h1>AI 辦公室</h1>
+      <p class="sub" id="clock">台北時間 —</p>
+    </div>
+    <span id="conn" class="conn" data-state="off" role="status"><i></i><b>未連線</b></span>
+  </div>
+  <div class="stats" id="stats" aria-label="狀態統計"></div>
+</header>
+
+<section id="nohash" class="nohash" hidden>
+  <div class="nohash-card">
+    <h2>請在網址後面加上頻道代號</h2>
+    <p>這個頁面需要知道要讀取哪一個 FEED 頻道。請在網址最後加上 <code>#頻道代號</code>，例如：</p>
+    <p><code id="example" class="example"></code></p>
+    <p class="muted">頻道代號只存在你的網址列與這台裝置的瀏覽器，不會寫在網頁原始碼裡。</p>
+  </div>
+</section>
+
+<main id="app" hidden>
+  <section class="stage" id="stage" aria-label="3D 辦公大樓">
+    <div class="viewport" id="viewport"></div>
+    <div class="overlay" id="overlay"></div>
+    <div class="stage-tools">
+      <button type="button" id="resetView" class="glassbtn" aria-label="重設視角">⟲ 重設視角</button>
+    </div>
+    <p class="hint" id="hint">拖曳旋轉・雙指縮放・點名牌看詳情</p>
+    <div class="fallback" id="fallback" hidden>
+      <b>此裝置無法顯示 3D 畫面</b>
+      <span>已改用清單檢視，所有資料都在下方。</span>
+    </div>
+  </section>
+
+  <aside class="drawer" id="drawer" data-state="peek" aria-label="資料面板">
+    <button type="button" class="handle" id="handle" aria-expanded="false" aria-controls="drawerBody">
+      <span class="grip" aria-hidden="true"></span>
+      <span class="handle-text" id="handleText">展開資料面板</span>
+    </button>
+    <nav class="tabs" role="tablist" aria-label="資料分頁">
+      <button type="button" role="tab" data-tab="bots" aria-selected="true">狀態</button>
+      <button type="button" role="tab" data-tab="usage" aria-selected="false">用量</button>
+      <button type="button" role="tab" data-tab="routines" aria-selected="false">排程</button>
+      <button type="button" role="tab" data-tab="events" aria-selected="false">事件</button>
+    </nav>
+    <div class="drawer-body" id="drawerBody">
+      <section class="pane" data-pane="bots" aria-label="各 bot 狀態">
+        <div id="detail" class="detail" hidden></div>
+        <div id="botList" class="botlist"></div>
+      </section>
+      <section class="pane" data-pane="usage" aria-label="用量概況" hidden><div id="usage"></div></section>
+      <section class="pane" data-pane="routines" aria-label="各 bot 排程" hidden><div id="routines"></div></section>
+      <section class="pane" data-pane="events" aria-label="最近事件" hidden><ol id="events" class="events"></ol></section>
+      <footer class="foot">
+        <p>唯讀頁面：只讀取 FEED，不寫入任何訊息，也沒有追蹤或分析程式。時間一律為台北時間（UTC+8）。</p>
+        <p><button type="button" id="clearCache" class="linkbtn">清除這台裝置的快取</button></p>
+      </footer>
+    </div>
+  </aside>
+</main>
+<script type="module" src="app.js"></script>
+</body>
+</html>
