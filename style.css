@@ -64,6 +64,7 @@ h1 { margin: 0; font-size: 19px; font-weight: 700; letter-spacing: .06em; }
 main { position: relative; z-index: 1; }
 .stage { position: fixed; inset: 0; z-index: 1; }
 .viewport { position: absolute; inset: 0; touch-action: none; }
+html, body { touch-action: manipulation; } /* 不讓點兩下放大整頁；單指捲動照常 */
 .viewport canvas { display: block; outline: none; }
 .overlay { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
 .stage-tools { position: absolute; z-index: 20; right: 12px; bottom: calc(var(--peek-h) + var(--safe-b) + 12px); display: flex; gap: 8px; }

@@ -88,7 +88,12 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   scene.fog = new THREE.Fog(0x1a1830, 38, 95);
   const camera = new THREE.PerspectiveCamera(40, 1, 0.5, 220);
   const controls = new OrbitControls(camera, renderer.domElement);
-  Object.assign(controls, { enableDamping: true, dampingFactor: 0.07, minDistance: 7, maxDistance: 75, rotateSpeed: 0.65, zoomSpeed: 0.9, panSpeed: 0.7, screenSpacePanning: true, maxPolarAngle: Math.PI * 0.485, minPolarAngle: 0.2 });
+  Object.assign(controls, { enableDamping: true, dampingFactor: 0.07, minDistance: 7.5, maxDistance: 75, rotateSpeed: 0.65, zoomSpeed: 0.9, enableZoom: true, panSpeed: 0.7, screenSpacePanning: true, maxPolarAngle: Math.PI * 0.485, minPolarAngle: 0.2 });
+  // 縮放：一指旋轉、兩指捏合縮放（兩指同時可旋轉，不平移，避免鏡頭目標跑進建築裡）
+  controls.touches = { ONE: THREE.TOUCH.ROTATE, TWO: THREE.TOUCH.DOLLY_ROTATE };
+  // 只讓 3D 畫面縮放，不讓瀏覽器把整頁放大：iOS Safari 會忽略 user-scalable=no，所以擋掉 gesture* 與多指 touchmove
+  for (const t of ['gesturestart', 'gesturechange', 'gestureend']) document.addEventListener(t, (e) => e.preventDefault(), { passive: false });
+  container.addEventListener('touchmove', (e) => { if (e.touches.length > 1) e.preventDefault(); }, { passive: false });
 
   // 光線：暖色主光 + 冷色補光 + 每層室內暖燈
   const hemi = new THREE.HemisphereLight(0xffe8d2, 0x2a2442, 1.05); scene.add(hemi);
@@ -636,14 +641,21 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     if (!animate) { camera.position.copy(v.pos); controls.target.copy(v.target); controls.update(); return; }
     flyTo(v);
   }
-  function setInsets(top, bottom) { insets = { top, bottom }; }
+  function setInsets(top, bottom) { insets = { top, bottom }; updateZoomLimits(); }
+  // 縮放範圍跟著畫面大小：最近約為預設距離的 1/3（不會穿進牆裡），最遠約 1.35 倍且不超過 66（再遠會被霧蓋住，建築不會縮到看不見）
+  function updateZoomLimits() {
+    const v = defaultView(), d = v.pos.distanceTo(v.target);
+    if (!isFinite(d) || d <= 0) return;
+    controls.minDistance = Math.max(7.5, d * 0.32);
+    controls.maxDistance = Math.min(66, d * 1.35);
+  }
 
   function resize() {
     const w = container.clientWidth, h = container.clientHeight;
     if (!w || !h) return;
     renderer.setSize(w, h, false);
     renderer.domElement.style.width = w + 'px'; renderer.domElement.style.height = h + 'px';
-    camera.aspect = w / h; camera.updateProjectionMatrix();
+    camera.aspect = w / h; camera.updateProjectionMatrix(); updateZoomLimits();
     const compact = w < 600; compactTags = compact;
     if (overlay.classList.contains('compact') !== compact) { overlay.classList.toggle('compact', compact); for (const f of figures.values()) f.dirty = true; }
   }
