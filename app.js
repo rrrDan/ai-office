@@ -42,12 +42,13 @@ function boot() {
   const save = () => { try { localStorage.setItem(KEY, serialize(state)); } catch { /* 空間不足時略過 */ } };
   const queueRender = () => { if (renderQueued) return; renderQueued = true; requestAnimationFrame(() => { renderQueued = false; render(); }); };
   let live = false;
+  const OPENED_AT = Math.floor(Date.now() / 1000); // 開頁之前的訊息（歷史重播）不觸發送文件
   let batching = false;
   function ingest(ev) {
     if (applyNtfy(state, ev)) {
       if (batching) return;
       save(); queueRender();
-      if (live && ev && ev.event === 'message') {
+      if (live && ev && ev.event === 'message' && Number(ev.time) >= OPENED_AT - 60) {
         try { const b = JSON.parse(ev.message); if (b && b.bot && b.step) { const k = resolveBot(b.bot); if (k) inferDelivery(k, normStatus(b.status), String(b.step)); } } catch { }
       }
     }
@@ -150,29 +151,44 @@ function boot() {
   applyTheme(); setInterval(applyTheme, 60000);
 
   // ---- 送資料：示範按鈕＋從 FEED 的步驟文字推斷（不改任何格式）----
-  const NAME_RE = BOTS.map(b => [b.key, new RegExp(b.key === 'akara' ? '阿卡拉' : b.short, 'i')]);
-  function mentioned(step, self) {
-    for (const [k, re] of NAME_RE) if (k !== self && re.test(step)) return k;
-    return null;
-  }
-  function inferDelivery(key, status, step) {
-    if (!office || !step || key.startsWith('x:')) return;
-    // 「轉交／交給／回報／通知／送／傳給 + 名字」→ 由這位 bot 送給被提到的人
-    const m = step.match(/(轉交給?|交給|交付給?|回報給?|通知|送給?|傳給)\s*([^\s，、。；:：]+)/);
-    let to = m ? mentioned(m[2], key) : null;
-    // 完成且提到交付、交件或回報，但沒寫給誰：送給 Nori（跨樓層）
+  // 名字：英文名後面不能再接英文字母（避免 Nori 撞到 Noriko 之類）；前面一定是動詞或空白。阿卡拉照中文比對
+  const NAME_SRC = BOTS.map(b => [b.key, b.key === 'akara' ? '阿卡拉(?:專案經理)?' : `${b.short}(?![A-Za-z])`]);
+  // 動詞必須「緊接著」名字（中間只允許空白），例如「交 Nori 驗收」「通知 Yuzu」「轉交給 Goya」
+  const VERB = '(?:轉交給?|交付給?|交件給|交辦|交給|回報給?|通知|送給|傳給|派給?|交)';
+  const HANDOFF = NAME_SRC.map(([k, n]) => [k, new RegExp(VERB + '\\s*' + n, 'i')]);
+  // 描述問題本身（例如「查送文件為何都給阿卡拉」）不是真的送文件
+  const META_RE = /(為何|為什麼|原因|是否|有沒有|查修)/;
+  function inferTarget(key, status, step) {
+    if (!step || key.startsWith('x:') || META_RE.test(step)) return null;
+    let to = null, at = Infinity;
+    for (const [k, re] of HANDOFF) {
+      if (k === key) continue;
+      const m = re.exec(step);
+      if (m && m.index < at) { at = m.index; to = k; } // 取文字中最先出現的那一位
+    }
+    // 完成且提到交付、交件或回報，但沒寫給誰：送給 Nori（原本的規則）
     if (!to && status === 'done' && /(交付|交件|已交|回報)/.test(step) && key !== 'nori') to = 'nori';
-    if (to) office.deliver(key, to, 'auto');
+    return to;
+  }
+  const deliveryLog = [];
+  window.__aiOfficeDeliveries = () => deliveryLog.slice();
+  window.__aiOfficeInfer = (bot, status, step) => { const k = resolveBot(bot); return k ? inferTarget(k, normStatus(status), String(step)) : null; };
+  function inferDelivery(key, status, step) {
+    if (!office) return;
+    const to = inferTarget(key, status, step);
+    if (to) { deliveryLog.push({ src: 'feed', from: key, to, step: String(step).slice(0, 120), t: Date.now() }); office.deliver(key, to, 'auto'); }
   }
   $('demoBtn').addEventListener('click', async () => {
     if (!office) return;
     const keys = BOTS.map(b => b.key);
     const from = keys[Math.floor(Math.random() * keys.length)];
-    const others = keys.filter(k => k !== from && office.floorOf(k) !== office.floorOf(from));
-    const to = (others.length ? others : keys.filter(k => k !== from))[Math.floor(Math.random() * (others.length || keys.length - 1))];
-    const mode = Math.random() < 0.5 ? 'stairs' : 'elevator';
+    const others = keys.filter(k => k !== from); // 寄件人以外的 5 位，平均隨機
+    const to = others[Math.floor(Math.random() * others.length)];
+    const same = office.floorOf(to) === office.floorOf(from);
+    const mode = same ? 'auto' : (Math.random() < 0.5 ? 'stairs' : 'elevator');
     const meta = (k) => BOTS.find(b => b.key === k).short;
-    $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${mode === 'stairs' ? '走樓梯' : '搭電梯'}）`;
+    $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${same ? '同樓層' : mode === 'stairs' ? '走樓梯' : '搭電梯'}）`;
+    deliveryLog.push({ src: 'demo', from, to, t: Date.now() });
     setDrawer('peek');
     $('demoBtn').disabled = true;
     try { await office.deliver(from, to, mode); } finally { $('demoBtn').disabled = false; }
