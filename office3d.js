@@ -5,32 +5,45 @@ import { BOTS, STATUS, botMeta, lookColor, viewStatus } from './feed.js';
 import { buildAvatar, tintAvatar, disposeAvatar, usesShape, DEFAULT_SET } from './avatars.js';
 
 const FLOOR_H = 5.0, WALL_H = 2.5, W = 12, D = 8, SLAB = 0.26;  // 樓層錯開堆疊（像剖面模型），從斜上方可看進每一層
-const FLOOR_INFO = { 3: '3F・總管室', 2: '2F・工作區', 1: '1F・專案大廳' };
+const TOP_FLOOR = 4, GYM_FLOOR = 3;   // 4F 總管室、3F 健身房與休息空間、2F 工作區、1F 專案大廳
+const FLOOR_INFO = { 4: '4F・總管室', 3: '3F・健身房與休息空間', 2: '2F・工作區', 1: '1F・專案大廳' };
 const SEATS = {   // 辦公桌位置 [x, z]
   nori: [0, -0.4], akara: [0.6, -0.2],
   meron: [-3.5, -1.3], yuzu: [3.5, -1.3], goya: [-3.5, 1.7], ichigo: [3.5, 1.7],
 };
 const EXTRA_SEATS = [[3.6, 1.9], [3.6, -1.6], [-3.4, -2.2]];
-// 休息區座位 [x, z, 朝向]（沙發座面中心）
-const LOUNGE = {
-  nori: [-3.4, 0.55, 0],
-  meron: [-0.5, -0.95, 0], yuzu: [0.5, -0.95, 0], goya: [-1.75, 0.7, 0.45], ichigo: [1.75, 0.7, -0.45],
-  akara: [-4.1, 0.55, 0],
-};
-const EXTRA_LOUNGE = [[-3.2, 0.55, 0], [-2.05, 1.5, -0.5], [-2.3, 0.4, -0.3]];
+// 3F 健身房與休息空間的站位（所有人休息時都到這層）。fz：接近點的 z（省略時用座位正前方 0.8）
+const REST_SPOTS = [
+  { id: 'tread1', cat: 'gym', act: 'treadmill', x: -4.55, z: -2.4, rot: Math.PI / 2, fz: -1.25 },
+  { id: 'tread2', cat: 'gym', act: 'treadmill', x: -2.8, z: -2.4, rot: Math.PI / 2, fz: -1.25 },
+  { id: 'bell1', cat: 'gym', act: 'dumbbells', x: -1.2, z: -2.4, rot: 0, fz: -1.25 },
+  { id: 'bell2', cat: 'gym', act: 'dumbbells', x: 0.35, z: -2.4, rot: 0, fz: -1.25 },
+  { id: 'bike1', cat: 'gym', act: 'bike', x: -4.4, z: 2.3, rot: 0, fz: 1.15 },
+  { id: 'bike2', cat: 'gym', act: 'bike', x: -2.8, z: 2.3, rot: 0, fz: 1.15 },
+  { id: 'yoga1', cat: 'gym', act: 'yoga', x: -1.2, z: 2.3, rot: 0, fz: 1.15 },
+  { id: 'yoga2', cat: 'gym', act: 'yoga', x: 0.35, z: 2.3, rot: 0, fz: 1.15 },
+  { id: 'sofa1', cat: 'rest', act: 'sofa', x: 2.0, z: 2.04, rot: 0 },
+  { id: 'sofa2', cat: 'rest', act: 'sofa', x: 2.8, z: 2.04, rot: 0 },
+  { id: 'mass1', cat: 'rest', act: 'massage', x: 4.4, z: 2.04, rot: 0 },
+  { id: 'mass2', cat: 'rest', act: 'massage', x: 4.75, z: -2.16, rot: 0 },
+  { id: 'cafe1', cat: 'rest', act: 'coffee', x: 2.2, z: -2.55, rot: Math.PI, fz: -1.45 },
+  { id: 'cafe2', cat: 'rest', act: 'coffee', x: 3.4, z: -2.55, rot: Math.PI, fz: -1.45 },
+];
+const STAND_ACTS = new Set(['treadmill', 'dumbbells', 'coffee']);   // 站著做（腳貼地／貼跑帶）
+const SOFA_ACTS = new Set(['sofa', 'massage']);                     // 沿用原本沙發坐姿（座位低 0.07）
+const SADDLE_TOP = 0.595, MAT_TOP = 0.02;
 const WALK_MS = 1500;
-const AISLE = 3.1, STAIR_X = -6.95, STAIR_X2 = -8.25, LANE_L = -5.35, LANE_R = 4.75, ELEV_X = 7.15, ELEV_DOOR_X = 5.85, WALK_SPEED = 3.0;
-const stairZ = (f) => 3.1;     // 每層樓梯口都在左牆前方
-const STAIR_MZ = -3.1;         // 兩層之間的中間平台（在後方）
+const AISLE = 3.1, LANE_L = -5.35, LANE_R = 4.75, ELEV_X = 7.15, ELEV_DOOR_X = 5.85, WALK_SPEED = 3.0;   // 左右兩座電梯以 x=0 對稱（左側 x 取負）
 const PAL = {
   slab: 0xf1e6d4, slabEdge: 0x2e2b45, pillar: 0x3b3856, mullion: 0x4a4668,
   desk: 0xf7f1e8, deskLeg: 0x3a3a4a, chair: 0x3d4466, chairSeat: 0x4b5580,
   pot: 0xe9d6c0, leaf: 0x5fae7a, leaf2: 0x7cc48f, skin: 0xffe3cf,
-  rug: [0, 0xb59a85, 0x8fa8a0, 0x9e93b8],
+  rug: [0, 0xb59a85, 0x8fa8a0, 0xc99a88, 0x9e93b8],
 };
 
 const floorY = (f) => (f - 1) * FLOOR_H;
-const FLOOR_COLOR = { 3: '#ffcf6e', 2: '#5fd4c0', 1: '#7cb6ff', 0: '#c3a6ff' };
+const FLOOR_COLOR = { 4: '#ffcf6e', 3: '#ff9b7a', 2: '#5fd4c0', 1: '#7cb6ff', 0: '#c3a6ff' };
+const floorAt = (y) => Math.max(1, Math.min(TOP_FLOOR, Math.round((y - floorY(1)) / FLOOR_H) + 1));
 const std = (color, extra = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.72, metalness: 0.02, flatShading: true, ...extra });
 const easeOut = (t) => 1 - Math.pow(1 - t, 3);
 
@@ -41,7 +54,9 @@ function signTexture(text) {
   g.fillStyle = grad; g.beginPath(); g.roundRect(6, 6, 628, 148, 36); g.fill();
   g.strokeStyle = 'rgba(255,184,107,.85)'; g.lineWidth = 5; g.stroke();
   g.fillStyle = '#ffd6a3';
-  g.font = '700 74px -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif';
+  let fs = 74;   // 字太長（例如「3F・健身房與休息空間」）時縮小字級，不超出牌子
+  const font = (n) => `700 ${n}px -apple-system, "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", sans-serif`;
+  g.font = font(fs); while (fs > 30 && g.measureText(text).width > 580) { fs -= 2; g.font = font(fs); }
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 320, 86);
   const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4; return t;
 }
@@ -100,9 +115,9 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   const hemi = new THREE.HemisphereLight(0xffe8d2, 0x2a2442, 1.05); scene.add(hemi);
   const sun = new THREE.DirectionalLight(0xffd2a6, 2.1);
   sun.position.set(10, 26, 16); sun.castShadow = true;
-  Object.assign(sun.shadow.camera, { left: -13, right: 13, top: 15, bottom: -9, near: 2, far: 70 });
+  Object.assign(sun.shadow.camera, { left: -14, right: 14, top: 20, bottom: -10, near: 2, far: 80 });
   sun.shadow.mapSize.set(1024, 1024); sun.shadow.bias = -0.0006; sun.shadow.normalBias = 0.03; sun.shadow.radius = 4;
-  sun.target.position.set(0, 6, 0); scene.add(sun, sun.target);
+  sun.target.position.set(0, 8, 0); scene.add(sun, sun.target);
   const rim = new THREE.DirectionalLight(0x9db4ff, 0.7); rim.position.set(-12, 10, -14); scene.add(rim);
 
   // 地面廣場
@@ -193,15 +208,15 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     scene.add(g);
   }
 
-  const TOP = floorY(3) + WALL_H;
+  const TOP = floorY(TOP_FLOOR) + WALL_H;
   for (const [px, pz] of [[-W / 2 + 0.16, -D / 2 + 0.16], [W / 2 - 0.16, -D / 2 + 0.16], [-W / 2 + 0.16, D / 2 - 0.16], [W / 2 - 0.16, D / 2 - 0.16]]) box(0.3, TOP + SLAB, 0.3, pillarMat, px, (TOP - SLAB) / 2, pz);
   for (const z of [-D / 2 + 0.16, D / 2 - 0.16]) box(W, 0.16, 0.2, pillarMat, 0, TOP, z);
   for (const x of [-W / 2 + 0.16, W / 2 - 0.16]) box(0.2, 0.16, D, pillarMat, x, TOP, 0);
-  for (let f = 1; f <= 3; f++) {
+  for (let f = 1; f <= TOP_FLOOR; f++) {
     const y = floorY(f);
     box(W, SLAB, D, slabMat, 0, y - SLAB / 2, 0);
     box(W + 0.14, SLAB * 0.55, D + 0.14, slabEdgeMat, 0, y - SLAB * 0.72, 0);   // 外緣深色收邊
-    if (f < 3) { // 樓板下方的燈條，照亮下一層
+    if (f < TOP_FLOOR) { // 樓板下方的燈條，照亮下一層
       for (const lx of [-3, 0, 3]) { const l = box(1.6, 0.04, 0.22, lampMat, lx, floorY(f + 1) - SLAB - 0.03, 0.4); l.castShadow = false; }
     }
     // 玻璃帷幕（後牆與兩側）＋窗框
@@ -209,7 +224,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     for (let i = 1; i < 6; i++) box(0.06, H, 0.06, mullionMat, -W / 2 + i * W / 6, y + H / 2, -D / 2 + 0.05);
     box(W, 0.06, 0.08, mullionMat, 0, y + 0.9, -D / 2 + 0.05); box(W, 0.08, 0.1, mullionMat, 0, y + H, -D / 2 + 0.05);
     for (const sx of [-1, 1]) {
-      const gap = sx < 0 ? [stairZ(f) - 0.7, stairZ(f) + 0.7] : [-0.8, 0.8];   // 左：樓梯出入口；右：電梯門
+      const gap = [-0.8, 0.8];   // 左右兩側都是電梯門
       const wx = sx * (W / 2 - 0.05);
       for (const [z0, z1] of [[-D / 2, gap[0]], [gap[1], D / 2]]) {
         const len = z1 - z0; if (len <= 0.05) continue; const zc = (z0 + z1) / 2;
@@ -227,74 +242,36 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     // 地毯
     const rug = new THREE.Mesh(new THREE.PlaneGeometry(W - 2.4, D - 2.6), std(PAL.rug[f], { roughness: 1, flatShading: false, transparent: true, opacity: 0.55 }));
     rug.rotation.x = -Math.PI / 2; rug.position.set(0, y + 0.006, 0); rug.receiveShadow = true; scene.add(rug);
-    plant(W / 2 - 0.75, y, -D / 2 + 0.75, 1.05);
-    plant(W / 2 - 0.75, y, D / 2 - 0.8, 0.8);
+    if (f !== GYM_FLOOR) { plant(W / 2 - 0.75, y, -D / 2 + 0.75, 1.05); plant(W / 2 - 0.75, y, D / 2 - 0.8, 0.8); }   // 3F 角落留給器材
   }
-  // ===== 左側樓梯（折返式，連接 1F-2F-3F）=====
-  // 每層之間分兩段：前段 x=STAIR_X 從樓梯口（前方）往後爬半層到中間平台，後段 x=STAIR_X2 再往前爬到上一層樓梯口。
-  // 兩段左右錯開，上一層的同一段在正上方 5 公尺（不再像舊版那樣兩段在同一直線上下交疊，身體穿過頭頂的踏階）；
-  // 每段只爬半層，坡度從約 46° 降到約 28°，身體前緣不會撞到前一階。
-  const FLIGHTS = [];    // 每段樓梯的踏階資料，給「腳踩地面」計算踏階頂面高度
-  const LANDINGS = [];   // 中間平台（不在樓板高度上）
-  const stairMat = std(0xe9dcc6, { roughness: 0.7 }), stairEdge = std(0x3b3856, { roughness: 0.5 });
-  const LX0 = STAIR_X2 - 0.65, LX1 = STAIR_X + 0.65;
-  function landing(y, z, x0, x1, back) {
-    box(x1 - x0, 0.2, 1.4, stairMat, (x0 + x1) / 2, y - 0.1, z);
-    box(x1 - x0 + 0.04, 0.08, 1.44, stairEdge, (x0 + x1) / 2, y - 0.22, z);
-    box(0.05, 0.9, 1.4, stairEdge, x0 + 0.01, y + 0.45, z);                       // 外側欄板
-    if (back) box(x1 - x0, 0.9, 0.05, stairEdge, (x0 + x1) / 2, y + 0.45, z + back * 0.69); // 後側欄板
-    if (y > 0.1) for (const px of [x0 + 0.08, x1 - 0.08]) box(0.14, y, 0.14, pillarMat, px, y / 2 - 0.2, z + (z > 0 ? 0.62 : -0.62));
-  }
-  function flight(x, y, y2, zs, ze, N) {
-    const dir = Math.sign(ze - zs);
-    FLIGHTS.push({ x, y, y2, zs, ze, N });
-    for (let i = 0; i < N; i++) {
-      const u = (i + 0.5) / N;
-      box(1.1, 0.12, Math.abs(ze - zs) / N + 0.02, stairMat, x, y + (y2 - y) * ((i + 1) / N) - 0.06, zs + (ze - zs) * u);
-    }
-    const run = Math.abs(ze - zs), rise = y2 - y, len = Math.hypot(run, rise), ang = Math.atan2(rise, run);
-    for (const ox of [-0.6, 0.6]) { const st = box(0.08, 0.3, len, stairEdge, x + ox, y + rise / 2 - 0.1, (zs + ze) / 2); st.rotation.x = dir > 0 ? ang : -ang; }
-    const rx = x - 0.62;
-    const rail = box(0.05, 0.05, len, legMat, rx, y + rise / 2 + 0.9, (zs + ze) / 2); rail.rotation.x = dir > 0 ? ang : -ang;
-    for (let i = 0; i <= 4; i++) { const u = i / 4; box(0.04, 0.9, 0.04, legMat, rx, y + rise * u + 0.45, zs + (ze - zs) * u); }
-  }
-  const STAIR_N = 16;   // 每段 16 階（每階高約 0.16、深 0.3）
-  for (let f = 1; f <= 3; f++) {
-    const z = stairZ(f), y = floorY(f);
-    landing(y, z, f === 1 ? STAIR_X - 0.65 : LX0, LX1, 0);
-    // 樓板邊緣（x=-6）到樓梯平台（x=-6.3）之間原本有 0.3 的空隙，補一塊門檻板讓腳有地方踩
-    box(0.36, 0.08, 1.4, slabEdgeMat, -W / 2 - 0.15, y - 0.04, z);
-    if (f < 3) {
-      const y2 = floorY(f + 1), ym = (y + y2) / 2;
-      landing(ym, STAIR_MZ, LX0, LX1, -1);
-      LANDINGS.push({ x0: LX0, x1: LX1, z0: STAIR_MZ - 0.7, z1: STAIR_MZ + 0.7, y: ym });
-      flight(STAIR_X, y, ym, z - 0.7, STAIR_MZ + 0.7, STAIR_N);
-      flight(STAIR_X2, ym, y2, STAIR_MZ + 0.7, z - 0.7, STAIR_N);
-    }
-  }
-
-  // ===== 右側電梯（玻璃井道＋車廂＋滑門）=====
-  const SHAFT_H = floorY(3) + WALL_H + 0.9;
-  for (const [ox, oz] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) box(0.12, SHAFT_H + SLAB, 0.12, pillarMat, ELEV_X + ox, (SHAFT_H - SLAB) / 2, oz);
-  box(1.75, 0.14, 1.75, pillarMat, ELEV_X, SHAFT_H, 0);
+  // ===== 左右兩座玻璃電梯（井道＋車廂＋滑門），連接 1F–4F；原本的左側樓梯已拆除 =====
+  const SHAFT_H = floorY(TOP_FLOOR) + WALL_H + 0.9;
   const shaftGlass = new THREE.MeshPhysicalMaterial({ color: 0xcfe0ff, transparent: true, opacity: 0.14, roughness: 0.05, depthWrite: false, side: THREE.DoubleSide });
-  { const gx = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gx.rotation.y = Math.PI / 2; gx.position.set(ELEV_X + 0.8, SHAFT_H / 2, 0); scene.add(gx);
-    for (const sz of [-1, 1]) { const gz = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gz.position.set(ELEV_X, SHAFT_H / 2, sz * 0.8); scene.add(gz); } }
-  for (let f = 1; f <= 3; f++) { box(0.62, 0.08, 1.5, slabEdgeMat, W / 2 + 0.31, floorY(f) - 0.04, 0); }
-  const cabin = new THREE.Group(); scene.add(cabin);
   const cabFrame = std(0x4a4668, { roughness: 0.4, metalness: 0.3 });
-  box(1.4, 0.08, 1.4, cabFrame, ELEV_X, 0.0, 0, cabin); box(1.4, 0.08, 1.4, cabFrame, ELEV_X, 2.3, 0, cabin);
-  for (const [ox, oz] of [[-0.68, -0.68], [0.68, -0.68], [-0.68, 0.68], [0.68, 0.68]]) box(0.06, 2.3, 0.06, cabFrame, ELEV_X + ox, 1.15, oz, cabin);
   const cabGlass = new THREE.MeshPhysicalMaterial({ color: 0xffe7c4, transparent: true, opacity: 0.22, roughness: 0.1, depthWrite: false, side: THREE.DoubleSide });
-  { const bk = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); bk.rotation.y = Math.PI / 2; bk.position.set(ELEV_X + 0.68, 1.15, 0); cabin.add(bk);
-    for (const sz of [-1, 1]) { const sd = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); sd.position.set(ELEV_X, 1.15, sz * 0.68); cabin.add(sd); } }
-  const cabLight = box(0.9, 0.03, 0.9, lampMat, ELEV_X, 2.24, 0, cabin); cabLight.castShadow = false;
   const doorMat = std(0xb9bfd3, { roughness: 0.3, metalness: 0.5 });
-  const doorL = box(0.05, 2.18, 0.66, doorMat, ELEV_X - 0.7, 1.13, -0.33, cabin);
-  const doorR = box(0.05, 2.18, 0.66, doorMat, ELEV_X - 0.7, 1.13, 0.33, cabin);
-  const elev = { y: 0, door: 0, lock: Promise.resolve() };
-  function applyElev() { cabin.position.y = elev.y; doorL.position.z = -0.33 - elev.door * 0.62; doorR.position.z = 0.33 + elev.door * 0.62; }
-  applyElev();
+  function buildElevator(side, startFloor) {
+    const ex = side * ELEV_X;
+    for (const [ox, oz] of [[-0.8, -0.8], [0.8, -0.8], [-0.8, 0.8], [0.8, 0.8]]) box(0.12, SHAFT_H + SLAB, 0.12, pillarMat, ex + ox, (SHAFT_H - SLAB) / 2, oz);
+    box(1.75, 0.14, 1.75, pillarMat, ex, SHAFT_H, 0);
+    { const gx = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gx.rotation.y = Math.PI / 2; gx.position.set(ex + side * 0.8, SHAFT_H / 2, 0); scene.add(gx);
+      for (const sz of [-1, 1]) { const gz = new THREE.Mesh(new THREE.PlaneGeometry(1.6, SHAFT_H), shaftGlass); gz.position.set(ex, SHAFT_H / 2, sz * 0.8); scene.add(gz); } }
+    for (let f = 1; f <= TOP_FLOOR; f++) box(0.62, 0.08, 1.5, slabEdgeMat, side * (W / 2 + 0.31), floorY(f) - 0.04, 0);   // 門檻板
+    const cabin = new THREE.Group(); scene.add(cabin);
+    box(1.4, 0.08, 1.4, cabFrame, ex, 0.0, 0, cabin); box(1.4, 0.08, 1.4, cabFrame, ex, 2.3, 0, cabin);
+    for (const [ox, oz] of [[-0.68, -0.68], [0.68, -0.68], [-0.68, 0.68], [0.68, 0.68]]) box(0.06, 2.3, 0.06, cabFrame, ex + ox, 1.15, oz, cabin);
+    { const bk = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); bk.rotation.y = Math.PI / 2; bk.position.set(ex + side * 0.68, 1.15, 0); cabin.add(bk);
+      for (const sz of [-1, 1]) { const sd = new THREE.Mesh(new THREE.PlaneGeometry(1.36, 2.2), cabGlass); sd.position.set(ex, 1.15, sz * 0.68); cabin.add(sd); } }
+    const cabLight = box(0.9, 0.03, 0.9, lampMat, ex, 2.24, 0, cabin); cabLight.castShadow = false;
+    const doorL = box(0.05, 2.18, 0.66, doorMat, ex - side * 0.7, 1.13, -0.33, cabin);
+    const doorR = box(0.05, 2.18, 0.66, doorMat, ex - side * 0.7, 1.13, 0.33, cabin);
+    const e = { side, x: ex, doorX: side * ELEV_DOOR_X, y: floorY(startFloor), door: 0, lock: Promise.resolve(), pending: 0, slots: {}, cabin, doorL, doorR, rides: 0 };
+    applyElev(e);
+    return e;
+  }
+  function applyElev(e) { e.cabin.position.y = e.y; e.doorL.position.z = -0.33 - e.door * 0.62; e.doorR.position.z = 0.33 + e.door * 0.62; }
+  const ELEVS = [buildElevator(1, 1), buildElevator(-1, GYM_FLOOR)];   // [右, 左]
+  const cabins = new Set(ELEVS.map(e => e.cabin));
 
   // ===== 窗外城市（白天是建築立面，夜晚窗戶亮燈）=====
   function windowTex(lit) {
@@ -325,25 +302,78 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   const sunDisc = new THREE.Mesh(new THREE.SphereGeometry(5, 20, 14), new THREE.MeshBasicMaterial({ color: 0xfff1c9, fog: false }));
   sunDisc.position.set(55, 62, -80); scene.add(sunDisc);
 
-  // 樓層專屬擺設
-  shelf(-3.6, floorY(3), -D / 2 + 0.45); shelf(3.6, floorY(3), -D / 2 + 0.45);
-  // 休息區：3F 左側沙發；2F 中央沙發＋兩張單人椅＋咖啡吧；1F 左側沙發＋單人椅
-  sofa(-3.4, floorY(3), 0.55, 0x8e6fb4); coffeeTable(-4.85, floorY(3), 0.6, 0.45); plant(-1.9, floorY(3), 0.3, 0.7); plant(4.6, floorY(3), -1.6, 0.9);
-  // 休息區茶几位置調整（#6）：原本在沙發正前方，沙發與茶几之間只剩約 0.6 公尺，人物身體（寬約 1 公尺）過不去；3F、1F 移到沙發左側；2F 沙發前方被兩張單人椅與茶几圍住、找不到出口，茶几移到沙發左側
-  sofa(0, floorY(2), -0.95, 0x6f9fd9); armchair(-1.75, floorY(2), 0.7, 0xe69a7a, 0.45); armchair(1.75, floorY(2), 0.7, 0xe69a7a, -0.45);
-  coffeeTable(-1.75, floorY(2), -1.0, 0.5); coffeeBar(0, floorY(2), -D / 2 + 0.5);
+  // 樓層專屬擺設（休息區已全部搬到 3F 健身房與休息空間）
+  shelf(-3.6, floorY(4), -D / 2 + 0.45); shelf(3.6, floorY(4), -D / 2 + 0.45); plant(4.6, floorY(4), -1.6, 0.9);
   box(2.0, 1.1, 0.06, std(0xfafafa, { emissive: 0x222222 }), -3.5, floorY(2) + 1.75, -D / 2 + 0.2); // 白板
-  sofa(-3.65, floorY(1), 0.55, 0xd98a6a); armchair(-2.05, floorY(1), 1.5, 0x6f9fd9, -0.5); coffeeTable(-5.1, floorY(1), 0.6, 0.45);
   box(2.6, 1.0, 0.7, std(0xf2e8da), 0.6, floorY(1) + 0.5, -2.6); // 接待櫃台
   box(2.7, 0.06, 0.8, std(0x3b3856), 0.6, floorY(1) + 1.03, -2.6);
   const door = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 2.4), new THREE.MeshPhysicalMaterial({ color: 0xffe2b8, transparent: true, opacity: 0.25, emissive: 0xffc98f, emissiveIntensity: 0.3, side: THREE.DoubleSide }));
   door.position.set(0, floorY(1) + 1.2, D / 2 + 0.01); scene.add(door);
 
+  // ===== 3F 健身房與休息空間：器材全部是程序化低多邊形幾何 =====
+  const deckMat = std(0x2d2b3d, { roughness: 0.6 });
+  const gymFrameMat = std(0x9aa1b8, { roughness: 0.35, metalness: 0.5 });
+  const gymAccentMat = std(0xff9b7a, { roughness: 0.5 });
+  const matMats = [std(0x7fc8a9, { roughness: 0.9 }), std(0xb59be0, { roughness: 0.9 })];
+  const beltTex = (() => { const c = document.createElement('canvas'); c.width = 16; c.height = 64; const g = c.getContext('2d'); g.fillStyle = '#2a2838'; g.fillRect(0, 0, 16, 64); g.fillStyle = '#4a4762'; for (let i = 0; i < 64; i += 8) g.fillRect(0, i, 16, 2); const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(1, 4); return t; })();
+  const beltMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: beltTex, roughness: 0.85 });
+  const PLATFORMS = [];   // 可以站上去的器材頂面（跑步機），給「腳踩地面」用
+  const CRANKS = [];      // 健身車踏板（有人騎時轉動）
+  const gy = floorY(GYM_FLOOR);
+  function treadmill(x, z) {   // 沿 x 方向，使用者面向 +x，控制台在 +x 端
+    const g = new THREE.Group(); g.position.set(x, gy, z);
+    box(1.4, 0.1, 0.78, deckMat, 0, 0.05, 0, g);
+    const belt = box(1.3, 0.04, 0.6, beltMat, 0, 0.12, 0, g); belt.rotation.y = Math.PI / 2; belt.scale.set(0.6 / 1.3, 1, 1.3 / 0.6);
+    for (const sz of [-1, 1]) box(0.05, 1.05, 0.05, gymFrameMat, 0.74, 0.6, sz * 0.32, g);   // 控制台立柱（不做扶手，前後都能走進跑帶）
+    const panel = box(0.08, 0.26, 0.66, gymAccentMat, 0.76, 1.18, 0, g); panel.rotation.z = 0.3;
+    scene.add(g);
+    PLATFORMS.push({ x0: x - 0.65, x1: x + 0.65, z0: z - 0.3, z1: z + 0.3, y: gy + 0.14 }, { x0: x - 0.7, x1: x + 0.7, z0: z - 0.39, z1: z + 0.39, y: gy + 0.1 });
+  }
+  function bike(x, z) {         // 使用者面向 +z，坐在原點的座墊上
+    const g = new THREE.Group(); g.position.set(x, gy, z);
+    box(0.1, 0.06, 1.0, gymFrameMat, 0, 0.03, 0.3, g);
+    box(0.5, 0.05, 0.08, gymFrameMat, 0, 0.025, -0.16, g); box(0.5, 0.05, 0.08, gymFrameMat, 0, 0.025, 0.76, g);
+    box(0.05, 0.5, 0.05, gymFrameMat, 0, 0.3, -0.04, g);
+    box(0.26, 0.07, 0.32, deckMat, 0, 0.56, 0, g);
+    const post = box(0.06, 0.95, 0.06, gymFrameMat, 0, 0.5, 0.64, g); post.rotation.x = -0.18;
+    box(0.52, 0.05, 0.06, gymFrameMat, 0, 0.98, 0.56, g);
+    const wheel = add(new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.06, 18), gymAccentMat), g); wheel.rotation.z = Math.PI / 2; wheel.position.set(0, 0.3, 0.74);
+    const crank = new THREE.Group(); crank.position.set(0, 0.3, 0.34); g.add(crank);
+    for (const sx of [-1, 1]) { const arm = box(0.03, 0.2, 0.04, gymFrameMat, sx * 0.24, sx * 0.08, 0, crank); arm.rotation.x = 0; box(0.1, 0.03, 0.08, deckMat, sx * 0.28, sx * 0.17, 0, crank); }
+    scene.add(g); CRANKS.push({ x, z, crank });
+  }
+  function yogaMat(x, z, i) { const m = box(0.66, 0.02, 1.5, matMats[i % 2], x, gy + 0.01, z); m.castShadow = false; }
+  function dumbbellRack(x, z) {
+    const g = new THREE.Group(); g.position.set(x, gy, z);
+    box(0.9, 0.5, 0.32, std(0x5a4a6e), 0, 0.25, 0, g);
+    for (let i = 0; i < 3; i++) { const bar = add(new THREE.Mesh(new THREE.CylinderGeometry(0.018, 0.018, 0.22, 6), gymFrameMat), g); bar.rotation.z = Math.PI / 2; bar.position.set(-0.3 + i * 0.3, 0.56, 0); for (const s of [-1, 1]) { const d = add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.05, 10), deckMat), g); d.rotation.z = Math.PI / 2; d.position.set(-0.3 + i * 0.3 + s * 0.1, 0.56, 0); } }
+    scene.add(g);
+  }
+  function massageChair(x, z, color) {   // 面向 +z，座位在原點
+    const g = new THREE.Group(); g.position.set(x, gy, z - 0.04);
+    const m = std(color), cush = std(new THREE.Color(color).lerp(new THREE.Color(0xffffff), 0.3).getHex());
+    box(0.9, 0.36, 0.84, m, 0, 0.24, 0, g);
+    const back = box(0.9, 1.05, 0.22, m, 0, 0.9, -0.33, g); back.rotation.x = -0.12;
+    box(0.16, 0.46, 0.84, m, -0.45, 0.46, 0, g); box(0.16, 0.46, 0.84, m, 0.45, 0.46, 0, g);
+    box(0.68, 0.08, 0.62, cush, 0, 0.47, 0.06, g);
+    box(0.5, 0.06, 0.06, gymAccentMat, 0, 1.38, -0.4, g);
+    scene.add(g);
+  }
+  for (const sp of REST_SPOTS) {
+    if (sp.act === 'treadmill') treadmill(sp.x, sp.z);
+    else if (sp.act === 'bike') bike(sp.x, sp.z);
+    else if (sp.act === 'yoga') yogaMat(sp.x, sp.z, sp.x > -0.5 ? 1 : 0);
+    else if (sp.act === 'dumbbells') dumbbellRack(sp.x, sp.z - 0.95);
+    else if (sp.act === 'massage') massageChair(sp.x, sp.z, 0x6f9fd9);
+  }
+  sofa(2.4, gy, 2.0, 0xd98a6a);
+  coffeeBar(2.8, gy, -3.45);
+
   // ===== 人物 =====
   const figures = new Map();
   let extraCount = 0;
 
-  function buildFigure(key, floor, x, z, isLead, lounge) {
+  function buildFigure(key, floor, x, z, isLead) {
     const grp = new THREE.Group(); grp.position.set(x, floorY(floor), z); scene.add(grp);
     const s = add(new THREE.Mesh(new THREE.PlaneGeometry(2.4, 2.2), blobMat), grp, false, false); s.rotation.x = -Math.PI / 2; s.position.set(0, 0.012, 0.15);
     // 桌子在人物前方（+z，朝預設鏡頭），人物面向鏡頭
@@ -372,8 +402,6 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     const walker = new THREE.Group(); walker.userData.walker = true; scene.add(walker);
     const slot = new THREE.Group(); walker.add(slot);
     const deskSeat = { pos: new THREE.Vector3(x, floorY(floor), z - 0.22), rot: 0, kind: 'desk', side: x < 0 ? 1 : -1 };
-    const loungeSeat = { pos: new THREE.Vector3(lounge[0], floorY(floor) - 0.07, lounge[1] + 0.02), rot: lounge[2] || 0, kind: 'lounge' };
-    walker.position.copy(loungeSeat.pos); walker.rotation.y = loungeSeat.rot;
     // 狀態光環
     const ringMat = new THREE.MeshBasicMaterial({ color: 0x8a94a6, transparent: true, opacity: 0.8, side: THREE.DoubleSide, depthWrite: false, toneMapped: false });
     const ring = new THREE.Mesh(new THREE.RingGeometry(0.5, 0.64, 28), ringMat); ring.rotation.x = -Math.PI / 2; ring.position.set(0, 0.03, 0); walker.add(ring);
@@ -400,22 +428,66 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     overlay.appendChild(el);
 
     const anchor = new THREE.Vector3();
-    const fig = { key, grp, slot, walker, deskSeat, loungeSeat, atDesk: false, want: false, busy: false, moving: false, carry: null, walk: null, floor, floorBase: floorY(floor), av: null, avSet: null, color: null, ringMat, ring, screenMat, hit, el, fx, dot, nm, st, step, anchor, status: '', shape: null, phase: Math.random() * 6 };
+    const fig = { key, grp, slot, walker, deskSeat, loungeSeat: null, restSpot: null, restSession: 0, commuting: null, props: null, atDesk: false, want: false, busy: false, moving: false, carry: null, walk: null, floor, floorBase: floorY(floor), av: null, avSet: null, color: null, ringMat, ring, screenMat, hit, el, fx, dot, nm, st, step, anchor, status: '', shape: null, phase: Math.random() * 6 };
     figures.set(key, fig);
+    assignRest(fig); walker.position.copy(fig.loungeSeat.pos); walker.rotation.y = fig.loungeSeat.rot;
     return fig;
+  }
+  // 休息站位：每位、每一段休息只抽一次（雜湊決定，不會每幀換），約一半健身、一半休息；該類滿了才改另一類
+  const spotOwner = new Map();
+  const hashStr = (s) => { let x = 0x811c9dc5; for (let i = 0; i < s.length; i++) { x ^= s.charCodeAt(i); x = Math.imul(x, 0x01000193) >>> 0; } return x; };
+  function restSeatOf(sp) {
+    if (sp.seat) return sp.seat;
+    const y = floorY(GYM_FLOOR) + (SOFA_ACTS.has(sp.act) ? -0.07 : 0);
+    sp.seat = { pos: new THREE.Vector3(sp.x, y, sp.z), rot: sp.rot, kind: 'lounge', act: sp.act, stand: STAND_ACTS.has(sp.act), spot: sp,
+      front: sp.fz != null ? new THREE.Vector3(sp.x, floorY(GYM_FLOOR), sp.fz) : null };
+    return sp.seat;
+  }
+  function assignRest(f) {
+    if (f.restSpot) return f.loungeSeat;
+    const base = f.key + '#' + f.restSession, first = (hashStr(base) >>> 3) & 1 ? 'rest' : 'gym';
+    const order = (cat) => REST_SPOTS.filter(s => s.cat === cat).map(s => [hashStr(base + '#' + s.id), s]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+    const sp = order(first).find(s => !spotOwner.has(s.id)) || order(first === 'gym' ? 'rest' : 'gym').find(s => !spotOwner.has(s.id)) || REST_SPOTS[0];
+    spotOwner.set(sp.id, f.key); f.restSpot = sp; f.loungeSeat = restSeatOf(sp);
+    return f.loungeSeat;
+  }
+  function releaseRest(f) {
+    if (!f.restSpot) return;
+    if (spotOwner.get(f.restSpot.id) === f.key) spotOwner.delete(f.restSpot.id);
+    f.restSpot = null; f.restSession++;
   }
 
   function ensureFigure(state, key) {
     if (figures.has(key)) return figures.get(key);
     const meta = botMeta(state, key);
-    if (meta.floor) { const [x, z] = SEATS[key]; return buildFigure(key, meta.floor, x, z, key === 'nori', LOUNGE[key]); }
+    if (meta.floor) { const [x, z] = SEATS[key]; return buildFigure(key, meta.floor, x, z, key === 'nori'); }
     if (extraCount >= EXTRA_SEATS.length) return null;
     const i = extraCount++;
     const [x, z] = EXTRA_SEATS[i];
-    return buildFigure(key, 1, x, z, false, EXTRA_LOUNGE[i]);
+    return buildFigure(key, 1, x, z, false);
   }
   for (const b of BOTS) ensureFigure({ extras: {}, looks: {} }, b.key);
 
+  // 手上道具（程序化）：一對啞鈴、一個咖啡杯，掛在人物的 slot 下
+  const propBarGeo = new THREE.CylinderGeometry(0.016, 0.016, 0.2, 6), propDiscGeo = new THREE.CylinderGeometry(0.045, 0.045, 0.045, 10), cupGeo = new THREE.CylinderGeometry(0.045, 0.038, 0.09, 10);
+  const cupMat = std(0xffffff, { roughness: 0.5 });
+  function propsOf(f) {
+    if (f.props) return f.props;
+    const bells = new THREE.Group(); f.slot.add(bells);
+    const one = () => { const g = new THREE.Group(); const b = new THREE.Mesh(propBarGeo, gymFrameMat); b.rotation.z = Math.PI / 2; g.add(b); for (const s of [-1, 1]) { const d = new THREE.Mesh(propDiscGeo, deckMat); d.rotation.z = Math.PI / 2; d.position.x = s * 0.09; g.add(d); } bells.add(g); return g; };
+    const bellL = one(), bellR = one();
+    const cup = new THREE.Mesh(cupGeo, cupMat); f.slot.add(cup);
+    bells.visible = false; cup.visible = false;
+    f.props = { bells, bellL, bellR, cup };
+    return f.props;
+  }
+  // 坐姿時（不含腳）角色最低點的高度，給健身車座墊、瑜珈墊對齊用
+  function sitMinOf(av) {
+    av.root.updateWorldMatrix(true, true); const bb = new THREE.Box3(); let min = Infinity;
+    const rootY = new THREE.Vector3().setFromMatrixPosition(av.root.matrixWorld).y;   // 量角色自己座標裡的高度（不含所在樓層）
+    for (const c of av.root.children) { if (c === av.legs) continue; bb.makeEmpty(); bb.expandByObject(c, true); if (!bb.isEmpty()) min = Math.min(min, bb.min.y - rootY); }
+    return isFinite(min) ? min : 0.5;
+  }
   function setFx(fig, status) {
     fig.fx.replaceChildren();
     const mk = (cls, text) => { const s = document.createElement('span'); s.className = cls; if (text) s.textContent = text; return s; };
@@ -426,22 +498,38 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     else if (status === 'done') fig.fx.append(mk('fx-ok', '✓'));
   }
 
-  // 走路：工作中回辦公桌，其他狀態去休息區；剛載入時直接就位不走路
+  // 走路：工作中回辦公桌，其他狀態去 3F 健身房與休息空間（不同樓層就搭電梯）；剛載入時直接就位不走路
   const bornAt = performance.now();
   function moveTo(fig, toDesk) {
+    const prevSeat = fig.atDesk ? fig.deskSeat : fig.loungeSeat;
+    if (toDesk) releaseRest(fig);
     fig.atDesk = toDesk;
     const from = fig.walker.position.clone();
-    const seat = toDesk ? fig.deskSeat : fig.loungeSeat;
+    const seat = toDesk ? fig.deskSeat : assignRest(fig);
     if (performance.now() - bornAt < 4000 || document.hidden) {
       fig.walk = null; fig.walker.position.copy(seat.pos); fig.walker.rotation.y = seat.rot; return;
     }
-    const fromSeat = toDesk ? fig.loungeSeat : fig.deskSeat;
-    const fl = Math.max(1, Math.min(3, Math.round(from.y / FLOOR_H) + 1));
-    const route = planPath(fl, from, seat.pos, bodyRadius(fig), [...seatMeshes(fromSeat), ...seatMeshes(seat)], true).pts;
-    const pts = [from, ...route]; pts[pts.length - 1] = seat.pos.clone();
-    const lens = []; let total = 0;
-    for (let i = 1; i < pts.length; i++) { const l = pts[i].distanceTo(pts[i - 1]); lens.push(l); total += l; }
-    fig.walk = { pts, lens, total, t0: performance.now(), ms: Math.max(WALK_MS, total / 2.4 * 1000), rot: seat.rot };
+    const fa = floorAt(from.y + 0.1), fb = floorAt(seat.pos.y + 0.1);
+    const ign = [...seatMeshes(prevSeat), ...seatMeshes(seat)];
+    if (fa === fb) {
+      const route = planPath(fa, from, seat.pos, bodyRadius(fig), ign, true).pts;
+      const pts = [from, ...route]; pts[pts.length - 1] = seat.pos.clone();
+      const lens = []; let total = 0;
+      for (let i = 1; i < pts.length; i++) { const l = pts[i].distanceTo(pts[i - 1]); lens.push(l); total += l; }
+      fig.walk = { pts, lens, total, t0: performance.now(), ms: Math.max(WALK_MS, total / 2.4 * 1000), rot: seat.rot };
+      start(); return;
+    }
+    fig.walk = null;
+    const p = (async () => {
+      await travel(fig, fa, fb, seat.pos, 'elevator', ign, true);
+      fig.walker.position.copy(seat.pos); await turnTo(fig, seat.rot, 250);
+    })();
+    fig.commuting = p;
+    p.catch(() => { }).finally(() => {
+      if (fig.commuting === p) fig.commuting = null;
+      fig.moving = false;
+      if (!fig.busy && fig.want !== fig.atDesk) moveTo(fig, fig.want);
+    });
     start();
   }
   function stepWalk(f, now) {
@@ -466,25 +554,12 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   }
 
   // ===== 腳踩地面：算出某個位置的「地面頂面高度」=====
-  // 電梯車廂內 → 車廂地板頂面；樓梯段上 → 該踏階頂面；其他 → 最近樓層的樓板頂面（floorY）
+  // 電梯車廂內 → 車廂地板頂面；跑步機上 → 跑帶頂面；其他 → 最近樓層的樓板頂面（floorY）
   const CAB_FLOOR = 0.04;   // 車廂地板（厚 0.08、中心在車廂原點）的頂面
   function groundAt(x, z, nearY) {
-    if (Math.abs(x - ELEV_X) < 0.7 && Math.abs(z) < 0.7 && Math.abs(nearY - elev.y) < 1.2) return elev.y + CAB_FLOOR;
-    if (x < -6.2) {
-      for (const fl of FLIGHTS) {
-        if (Math.abs(x - fl.x) >= 0.56) continue;
-        if (nearY < fl.y - 0.05 || nearY > fl.y2 + 0.05) continue;
-        // 每階踏板前後各多出 0.01（建模時的重疊），邊界上取較高那一階
-        const run = Math.abs(fl.ze - fl.zs), ov = 0.01 / run;
-        const u = (z - fl.zs) / (fl.ze - fl.zs);
-        if (u < -ov || u > 1 + ov) continue;
-        const i = Math.max(0, Math.min(fl.N - 1, Math.floor((u + ov) * fl.N)));
-        return fl.y + (fl.y2 - fl.y) * (i + 1) / fl.N;
-      }
-      for (const L of LANDINGS) if (x >= L.x0 - 0.02 && x <= L.x1 + 0.02 && z >= L.z0 - 0.02 && z <= L.z1 + 0.02 && Math.abs(nearY - L.y) < 0.6) return L.y;
-    }
-    const f = Math.max(1, Math.min(3, Math.round((nearY - floorY(1)) / FLOOR_H) + 1));
-    return floorY(f);
+    for (const e of ELEVS) if (Math.abs(x - e.x) < 0.7 && Math.abs(z) < 0.7 && Math.abs(nearY - e.y) < 1.2) return e.y + CAB_FLOOR;
+    for (const p of PLATFORMS) if (x >= p.x0 && x <= p.x1 && z >= p.z0 && z <= p.z1 && Math.abs(nearY - p.y) < 0.6) return p.y;
+    return floorY(floorAt(nearY));
   }
   // 每格：先把腳擺好（走路擺動），把兩隻腳的每個頂點換到世界座標，查每個頂點正下方的地面高度，
   // 再把整個角色上下移到「沒有任何頂點低於它下面的地面，且至少有一個頂點剛好貼地」
@@ -507,7 +582,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     if (!floorMeshes) {
       const skip = new Set(); for (const g of figures.values()) g.walker.traverse(o => skip.add(o));
       staticMeshes = []; scene.traverse(o => { if (o.isMesh && !skip.has(o) && o.visible && !(o.material && (o.material.transparent || o.material.visible === false))) staticMeshes.push(o); });
-      const floorMats = new Set([slabMat, slabEdgeMat, stairMat, cabFrame]);
+      const floorMats = new Set([slabMat, slabEdgeMat, cabFrame, deckMat, beltMat]);
       floorMeshes = staticMeshes.filter(o => floorMats.has(o.material));
     }
     f.walker.updateMatrixWorld(true);
@@ -521,17 +596,17 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
         if (pos.getY(vi++) > minLocal + 1e-4) return;   // 只量腳底那一面的頂點
         sole = Math.min(sole, v.y); cx += v.x; cz += v.z; n++;
         gapGround = Math.min(gapGround, v.y - groundAt(v.x, v.z, ny));
-        // 射線起點在頂點上方 0.15（樓梯上下兩段在同一直線，避免打到頭頂上的下一段踏階）
+        // 射線起點在頂點上方 0.15（避免打到頭頂上一層的東西）
         probeRay.set(rayO.set(v.x, v.y + 0.15, v.z), DOWN); probeRay.far = 1.5;
         const h = probeRay.intersectObjects(floorMeshes, false)[0]; if (h) gap = Math.min(gap, v.y - h.point.y);
         const h2 = probeRay.intersectObjects(staticMeshes, false)[0]; if (h2) gapAny = Math.min(gapAny, v.y - h2.point.y);
       });
       out.push({ sole: +sole.toFixed(4), gap: isFinite(gap) ? +gap.toFixed(4) : null, gapGround: +gapGround.toFixed(4), gapAny: isFinite(gapAny) ? +gapAny.toFixed(4) : null, x: +(cx / n).toFixed(2), z: +(cz / n).toFixed(2) });
     }
-    return { feet: out, legsVisible: f.av.legs.visible, walking: !!f.walk || f.moving, busy: f.busy, inCab: Math.abs(f.walker.position.x - ELEV_X) < 0.7 && Math.abs(f.walker.position.z) < 0.7 };
+    return { feet: out, legsVisible: f.av.legs.visible, walking: !!f.walk || f.moving, busy: f.busy, inCab: ELEVS.some(e => Math.abs(f.walker.position.x - e.x) < 0.7 && Math.abs(f.walker.position.z) < 0.7) };
   }
 
-  // 唯讀檢查用：角色身體（所有網格頂點）有沒有穿進靜態物件（家具、樓梯、牆柱）。
+  // 唯讀檢查用：角色身體（所有網格頂點）有沒有穿進靜態物件（家具、器材、牆柱）。
   // 每個靜態網格都在自己的區域座標裡用幾何外框判斷，穿入深度 > 1 公分才算；站立用的地板（樓板、平台、踏階頂面）只在穿入時才算。
   let bodyTargets = null; const bpL = new THREE.Vector3(), bpS = new THREE.Vector3(), bpInv = new THREE.Matrix4();
   function bodyProbe(k) {
@@ -561,7 +636,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       }
       if (worst > 0.01) {
         const c = new THREE.Vector3(); m.getWorldPosition(c);
-        const cat = (m.material === stairMat || m.material === stairEdge || (c.x < -6.2 && m.material === legMat)) ? 'stair' : (m.material === slabMat || m.material === slabEdgeMat || m.material === cabFrame) ? 'floor' : 'furniture';
+        const cat = (m.material === slabMat || m.material === slabEdgeMat || m.material === cabFrame) ? 'floor' : 'furniture';
         hits.push({ cat, depth: +worst.toFixed(3), pt: [+wv.x.toFixed(2), +(wv.y - f.walker.position.y).toFixed(2), +wv.z.toFixed(2), wv.part], mat: '#' + m.material.color.getHexString(), at: [+c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2)] });
       }
     }
@@ -578,14 +653,14 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   let OBS = null;
   function obstacles() {
     if (OBS) return OBS;
-    OBS = { 1: [], 2: [], 3: [] };
+    OBS = {}; for (let fl = 1; fl <= TOP_FLOOR; fl++) OBS[fl] = [];
     scene.updateMatrixWorld(true); const bb = new THREE.Box3();
-    const visit = (o, fn) => { if (o.userData.walker || o === cabin) return; fn(o); for (const c of o.children) visit(c, fn); };
+    const visit = (o, fn) => { if (o.userData.walker || cabins.has(o)) return; fn(o); for (const c of o.children) visit(c, fn); };
     visit(scene, o => {
       if (!o.isMesh || !o.visible) return; const mt = o.material;
       if (!mt || mt.transparent || mt.visible === false || mt === slabMat || mt === slabEdgeMat) return;
       bb.setFromObject(o);
-      for (let fl = 1; fl <= 3; fl++) { const y = floorY(fl); if (bb.max.y > y + 0.03 && bb.min.y < y + 1.9 && bb.max.x > GX0 - 1 && bb.min.x < GX1 + 1 && bb.max.z > GZ0 - 1 && bb.min.z < GZ1 + 1) OBS[fl].push({ x0: bb.min.x, x1: bb.max.x, z0: bb.min.z, z1: bb.max.z, m: o }); }
+      for (let fl = 1; fl <= TOP_FLOOR; fl++) { const y = floorY(fl); if (bb.max.y > y + 0.03 && bb.min.y < y + 1.9 && bb.max.x > GX0 - 1 && bb.min.x < GX1 + 1 && bb.max.z > GZ0 - 1 && bb.min.z < GZ1 + 1) OBS[fl].push({ x0: bb.min.x, x1: bb.max.x, z0: bb.min.z, z1: bb.max.z, m: o }); }
     });
     return OBS;
   }
@@ -595,7 +670,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     if (!seat) return [];
     const ck = whole ? '_meshW' : '_mesh';
     if (seat[ck]) return seat[ck];
-    const fl = Math.max(1, Math.min(3, Math.round(seat.pos.y / FLOOR_H) + 1));
+    const fl = floorAt(seat.pos.y + 0.1);
     const obs = obstacles()[fl];
     const hit = obs.filter(o => seat.pos.x > o.x0 - 0.02 && seat.pos.x < o.x1 + 0.02 && seat.pos.z > o.z0 - 0.02 && seat.pos.z < o.z1 + 0.02).map(o => o.m);
     if (!whole) return (seat[ck] = hit);
@@ -665,10 +740,11 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     return { pts: out, ok: true, snapped: !F.pt(end.x, end.z) };
   }
 
-  // ===== 送資料動畫：走樓梯或搭電梯到對方座位，交付後回座 =====
+  // ===== 送資料動畫：搭電梯（同層直接走）到對方座位，交付後回座 =====
   const P = (x, f, z) => new THREE.Vector3(x, floorY(f), z);
   function seatFront(seat) {
     if (seat.kind === 'desk') return new THREE.Vector3(seat.pos.x + seat.side * 1.1, seat.pos.y, seat.pos.z);
+    if (seat.front) return seat.front.clone();
     return new THREE.Vector3(seat.pos.x + Math.sin(seat.rot) * 0.8, seat.pos.y + 0.07, seat.pos.z + Math.cos(seat.rot) * 0.8);
   }
   const tasks = new Set();
@@ -694,46 +770,57 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     });
   }
   function turnTo(f, rot, ms = 300) { const r0 = f.walker.rotation.y; const df = ((rot - r0 + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI; return tween(ms, (e) => { f.walker.rotation.y = r0 + df * e; }); }
-  const elevTo = (fl) => { const y0 = elev.y, y1 = floorY(fl); if (Math.abs(y1 - y0) < 0.01) return Promise.resolve(); return tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (e) => { elev.y = y0 + (y1 - y0) * e; applyElev(); }); };
-  const doors = (open) => { const d0 = elev.door, d1 = open ? 1 : 0; return tween(420, (e) => { elev.door = d0 + (d1 - d0) * e; applyElev(); }); };
-  function rideElevator(f, fa, fb) {
+  const elevTo = (e, fl) => { const y0 = e.y, y1 = floorY(fl); if (Math.abs(y1 - y0) < 0.01) return Promise.resolve(); return tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (k) => { e.y = y0 + (y1 - y0) * k; applyElev(e); }); };
+  const doors = (e, open) => { const d0 = e.door, d1 = open ? 1 : 0; return tween(420, (k) => { e.door = d0 + (d1 - d0) * k; applyElev(e); }); };
+  // 一座電梯一次載一人；後到的人在該層門前排隊（e.lock 依序）
+  function rideElevator(f, e, fa, fb, onBoard) {
     const run = async () => {
-      await elevTo(fa); await doors(true);
-      await walk(f, [P(ELEV_X, fa, 0)], 1.6); await turnTo(f, -Math.PI / 2);
-      await doors(false);
-      const off = f.walker.position.y - elev.y;
-      const y0 = elev.y, y1 = floorY(fb);
-      await tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (e) => { elev.y = y0 + (y1 - y0) * e; applyElev(); f.walker.position.y = elev.y + off; });
-      await doors(true);
-      await walk(f, [P(ELEV_DOOR_X, fb, 0)], 1.6);
-      doors(false);
+      await elevTo(e, fa); await doors(e, true);
+      if (onBoard) onBoard();
+      await walk(f, [P(f.walker.position.x, fa, 0), P(e.doorX, fa, 0), P(e.x, fa, 0)], 1.6);   // 先橫移到門的正前方，再直直走進車廂 await turnTo(f, e.side > 0 ? -Math.PI / 2 : Math.PI / 2);
+      await doors(e, false);
+      const off = f.walker.position.y - e.y;   // 站在車廂地板上：跟著車廂一起移動，不掛進車廂群組
+      const y0 = e.y, y1 = floorY(fb);
+      await tween(500 + Math.abs(y1 - y0) / 4.5 * 1000, (k) => { e.y = y0 + (y1 - y0) * k; applyElev(e); f.walker.position.y = e.y + off; });
+      await doors(e, true);
+      await walk(f, [P(e.doorX, fb, 0)], 1.6);
+      e.rides++;
+      doors(e, false);
     };
-    const p = elev.lock.then(run); elev.lock = p.catch(() => { }); return p;
+    const p = e.lock.then(run); e.lock = p.catch(() => { }); return p;
   }
-  // 樓梯路線：樓梯口 → 前段 → 中間平台（橫移到後段）→ 後段 → 上一層樓梯口；下樓反過來
-  const stairHub = (fl, r) => P(GX0 + r - 0.3, fl, stairZ(fl));     // 樓梯口內側（樓板上）
-  const ELEV_HUB = (fl, r) => P(GX1 - r + 0.3, fl, 0);               // 電梯門前（樓板上）
-  function stairsRoute(fa, fb) {
-    const pts = [], V = (x, y, z) => new THREE.Vector3(x, y, z), z = stairZ(1), mz = STAIR_MZ;
-    const up = (fl) => { const y = floorY(fl), y2 = floorY(fl + 1), ym = (y + y2) / 2;
-      return [V(STAIR_X, y, z), V(STAIR_X, y, z - 0.7), V(STAIR_X, ym, mz + 0.7), V(STAIR_X, ym, mz), V(STAIR_X2, ym, mz), V(STAIR_X2, ym, mz + 0.7), V(STAIR_X2, y2, z - 0.7), V(STAIR_X2, y2, z), V(STAIR_X, y2, z)]; };
-    if (fb > fa) for (let fl = fa; fl < fb; fl++) pts.push(...up(fl).slice(fl === fa ? 0 : 1));
-    else for (let fl = fa - 1; fl >= fb; fl--) pts.push(...up(fl).reverse().slice(fl === fa - 1 ? 0 : 1));
-    return pts;
+  const ELEV_HUB = (e, fl, r) => P(e.side > 0 ? GX1 - r + 0.3 : GX0 + r - 0.3, fl, 0);   // 電梯門前（樓板上）
+  // 排隊位置：0＝門前；1、2＝門前左右（沿牆）；3 以後沿走道往內（z=0.4，避開 2F 辦公桌）
+  function queueSpot(e, fl, r, k) {
+    const hub = ELEV_HUB(e, fl, r);
+    if (k === 0) return hub;
+    if (k <= 2) return new THREE.Vector3(hub.x - e.side * 0.45, hub.y, k === 1 ? 1.0 : -1.0);   // 往內退一點，身體不碰門框立柱
+    return new THREE.Vector3(hub.x - e.side * 0.95 * (k - 2), hub.y, 0.4);
   }
-  // 同一層：A* 找路；跨樓層：先走到樓梯口或電梯門，上下樓，再從另一層的樓梯口或電梯門走到目的地
+  function takeSlot(e, fl) { const s = e.slots[fl] || (e.slots[fl] = new Set()); let k = 0; while (s.has(k)) k++; s.add(k); return k; }
+  function freeSlot(e, fl, k) { e.slots[fl] && e.slots[fl].delete(k); }
+  // 選梯：預估上車時間較短的那座；差不到 0.3 秒時選人所在那一側。選定後不換梯
+  function pickElevator(f, fa) {
+    const est = (e) => e.pending * 7000 + Math.abs(e.y - floorY(fa)) / 4.5 * 1000;
+    const [R, L] = ELEVS, tr = est(R), tl = est(L);
+    if (Math.abs(tr - tl) <= 300) return f.walker.position.x < 0 ? L : R;
+    return tr < tl ? R : L;
+  }
+  // 同一層：A* 找路；跨樓層：走到選定電梯的門前（或排隊位置），搭電梯，再從另一層電梯門前走到目的地
   async function travel(f, fa, fb, target, mode, ign, forceEnd) {
     const r = bodyRadius(f);
     if (fa === fb) { await walk(f, planPath(fa, f.walker.position, target, r, ign, forceEnd).pts); return; }
-    if (mode === 'stairs') {
-      await walk(f, planPath(fa, f.walker.position, stairHub(fa, r), r, ign).pts);
-      await walk(f, [...stairsRoute(fa, fb), stairHub(fb, r)], 2.6);
-      await walk(f, planPath(fb, stairHub(fb, r), target, r, ign, forceEnd).pts);
-    } else {
-      await walk(f, planPath(fa, f.walker.position, ELEV_HUB(fa, r), r, ign).pts);
-      await walk(f, [P(ELEV_DOOR_X, fa, 0)]); await rideElevator(f, fa, fb); await walk(f, [ELEV_HUB(fb, r)], 1.6);
-      await walk(f, planPath(fb, ELEV_HUB(fb, r), target, r, ign, forceEnd).pts);
-    }
+    const e = pickElevator(f, fa); e.pending++;
+    f.lastElev = e.side > 0 ? 'R' : 'L';
+    let k = -1;
+    try {
+      k = takeSlot(e, fa);
+      await walk(f, planPath(fa, f.walker.position, queueSpot(e, fa, r, k), r, ign).pts);
+      if (k > 0) await walk(f, [queueSpot(e, fa, r, k)], 1.6);
+      await rideElevator(f, e, fa, fb, () => { freeSlot(e, fa, k); k = -1; });
+    } finally { if (k >= 0) freeSlot(e, fa, k); e.pending--; }
+    await walk(f, [ELEV_HUB(e, fb, r)], 1.6);
+    await walk(f, planPath(fb, ELEV_HUB(e, fb, r), target, r, ign, forceEnd).pts);
   }
   const docGeo = new THREE.BoxGeometry(0.34, 0.05, 0.26), paperGeo = new THREE.BoxGeometry(0.28, 0.02, 0.22);
   const docMat = std(0xffc861, { roughness: 0.5 }), paperMat = std(0xffffff, { roughness: 0.8 });
@@ -743,8 +830,11 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     if (!a || !b || a === b || a.busy || !a.av) return false;
     a.busy = true; a.walk = null;
     try {
-      const fa = a.floor, fb = b.floor;
-      if (mode !== 'stairs' && mode !== 'elevator') mode = Math.abs(fa - fb) >= 2 ? 'elevator' : (Math.random() < 0.5 ? 'stairs' : 'elevator');
+      // 正在搭電梯上下班的人，先讓他到位；收件人在哪一層就送到哪一層（例如在 3F 休息）
+      if (a.commuting) await a.commuting.catch(() => { });
+      if (b.commuting) await b.commuting.catch(() => { });
+      const fa = floorAt(a.walker.position.y + 0.1), fb = floorAt(b.walker.position.y + 0.1);
+      mode = 'elevator';   // 樓梯已拆除；舊的 'stairs' 參數一律改搭電梯
       const doc = makeDoc(); doc.position.set(0, 1.0, 0.42); a.walker.add(doc); a.carry = doc; a.dirty = true;
       const startSeat = a.atDesk ? a.deskSeat : a.loungeSeat;
       const bSeat = b.atDesk ? b.deskSeat : b.loungeSeat;
@@ -759,8 +849,9 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       b.el.classList.add('got'); setTimeout(() => b.el.classList.remove('got'), 2600);
       await wait(700);
       // 回座（工作中回辦公桌，其他回休息區）
-      const home = a.want ? a.deskSeat : a.loungeSeat;
-      await travel(a, fb, fa, home.pos, mode, seatMeshes(home), true);
+      if (a.want) releaseRest(a);
+      const home = a.want ? a.deskSeat : assignRest(a);
+      await travel(a, fb, floorAt(home.pos.y + 0.1), home.pos, mode, seatMeshes(home), true);
       a.walker.position.copy(home.pos); await turnTo(a, home.rot, 250);
       a.atDesk = a.want;
       return true;
@@ -802,6 +893,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
         if (fig.av) disposeAvatar(fig.av);
         fig.av = buildAvatar(currentSet, shape); fig.slot.add(fig.av.root);
         fig.avSet = currentSet; fig.shape = shape; fig.color = null;
+        fig.sitMin = sitMinOf(fig.av); fig._rad = null;
       }
       if (fig.color !== hex) { tintAvatar(fig.av, hex); fig.color = hex; }
       const v = viewStatus(state, key), s = v.s;
@@ -811,7 +903,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       if (status !== fig.status) { setFx(fig, status); fig.status = status; }
       const wantDesk = status === 'working';
       fig.want = wantDesk;
-      if (!fig.busy && wantDesk !== fig.atDesk) moveTo(fig, wantDesk);
+      if (!fig.busy && !fig.commuting && wantDesk !== fig.atDesk) moveTo(fig, wantDesk);
       fig.ringMat.color.set(sc.color);
       fig.screenMat.emissive.set(status === 'error' ? '#ff5d6c' : '#6bb4ff');
       fig.screenMat.emissiveIntensity = (status === 'working' ? 1.2 : (status === 'idle' || status === 'unknown' ? 0.05 : 0.35)) * (theme === 'night' ? 1.6 : 1);
@@ -849,13 +941,13 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     const vfov = THREE.MathUtils.degToRad(camera.fov) * (usableH / h);
     const hfov = 2 * Math.atan(Math.tan(vfov / 2) * aspect);
     const az = THREE.MathUtils.degToRad(aspect < 0.9 ? 15 : 24), polar = THREE.MathUtils.degToRad(66);
-    const effW = (W + 3.4) * Math.cos(az) + D * Math.sin(az) - (aspect < 0.9 ? 0.9 : -0.6);
-    const effH = (2 * FLOOR_H + WALL_H + 0.6) * Math.sin(polar) + D * Math.cos(polar) + 2.6;
+    const effW = (W + 3.6) * Math.cos(az) + D * Math.sin(az) - (aspect < 0.9 ? 0.9 : -0.6);
+    const effH = ((TOP_FLOOR - 1) * FLOOR_H + WALL_H + 0.6) * Math.sin(polar) + D * Math.cos(polar) + 2.6;
     const dist = Math.max((effH / 2) / Math.tan(vfov / 2), (effW / 2) / Math.tan(hfov / 2)) + D * 0.35;
     // 依可用區域的中心偏移目標點，避免被頁首或抽屜擋住
     const shiftPx = (insets.bottom - insets.top) / 2;
     const worldPerPx = 2 * dist * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / h;
-    const target = new THREE.Vector3(0, (2 * FLOOR_H + WALL_H) / 2 - shiftPx * worldPerPx * Math.sin(polar), 0);
+    const target = new THREE.Vector3(0, ((TOP_FLOOR - 1) * FLOOR_H + WALL_H) / 2 - shiftPx * worldPerPx * Math.sin(polar), 0);
     const pos = new THREE.Vector3(dist * Math.sin(polar) * Math.sin(az), dist * Math.cos(polar), dist * Math.sin(polar) * Math.cos(az)).add(target);
     return { pos, target };
   }
@@ -897,11 +989,11 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   // 名牌投影：每個名牌只能待在自己那層樓的垂直範圍內（不會跑到別層）
   const v = new THREE.Vector3(), vb = new THREE.Vector3();
   function bandOf(f, w, h) {
-    // 人物目前所在樓層（走樓梯/電梯途中以最接近的樓層計）
-    const fl = Math.max(0, Math.min(2, Math.round((f.walker.position.y - floorY(1)) / FLOOR_H)));
+    // 人物目前所在樓層（搭電梯途中以最接近的樓層計）
+    const fl = Math.max(0, Math.min(TOP_FLOOR - 1, Math.round((f.walker.position.y - floorY(1)) / FLOOR_H)));
     const base = fl * FLOOR_H + floorY(1);
     // 上界：上一層樓板的前緣（最上層則是牆頂上方一點）；下界：本層地板前緣
-    if (fl < 2) vb.set(f.walker.position.x, base + FLOOR_H - SLAB - 0.1, D / 2);
+    if (fl < TOP_FLOOR - 1) vb.set(f.walker.position.x, base + FLOOR_H - SLAB - 0.1, D / 2);
     else vb.set(f.walker.position.x, base + WALL_H + (compactTags ? 0.6 : 1.3), f.walker.position.z);
     vb.project(camera);
     const top = (-vb.y * 0.5 + 0.5) * h;
@@ -1117,22 +1209,46 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
         la = ay + sw; ra = ay - sw; av.head.rotation.set(0, 0, sw); av.head.position.y = av.headY;
       }
       if (f.carry) { la = ra = ay + 0.1; }
+      // 3F 休息活動：只有到了自己的站位、沒有在走路或送文件時才做（站位整段休息固定，不會每幀換）
+      const ls = f.loungeSeat;
+      const atRest = !f.atDesk && !walking && !f.busy && !f.commuting && ls && Math.hypot(f.walker.position.x - ls.pos.x, f.walker.position.z - ls.pos.z) < 0.08 && Math.abs(f.walker.position.y - ls.pos.y) < 0.3;
+      const act = atRest ? ls.act : null;
+      f.act = act;
+      if (act === 'treadmill') { const sw = Math.sin(t * 11 + f.phase) * 0.06; la = ay + sw; ra = ay - sw; av.head.rotation.set(0.05, 0, 0); av.head.position.y = hy; }
+      else if (act === 'dumbbells') { const u = 0.5 - 0.5 * Math.cos(p * 2.6); la = ra = ay + u * 0.16; av.head.rotation.set(-0.05, 0, 0); av.head.position.y = hy; }
+      else if (act === 'coffee') { const u = Math.pow(Math.max(0, Math.sin(p * 0.9)), 3); ra = ay + u * 0.15; av.head.rotation.set(-0.08 * u, 0, 0); }
+      else if (act === 'bike') { la = ra = ay + 0.06; av.head.rotation.set(0.1, 0, 0); av.head.position.y = hy; }
+      else if (act === 'yoga') { const u = Math.sin(p * 0.8); la = ra = ay + 0.04 + u * 0.06; av.head.rotation.set(-0.12 + u * 0.05, 0, 0); av.head.position.y = hy; av.body.scale.set(1 + u * 0.03, 1 - u * 0.02, 1 + u * 0.03); }
+      else if (act === 'massage') { av.head.rotation.set(-0.18, 0, Math.sin(p * 0.5) * 0.06); }
       if (av.armL) av.armL.position.y = la;
       if (av.armR) av.armR.position.y = ra;
+      // 手上道具（啞鈴、咖啡杯）跟著手臂
+      const pr = propsOf(f);
+      pr.bells.visible = act === 'dumbbells'; pr.cup.visible = act === 'coffee';
+      if (pr.bells.visible && av.armL && av.armR) { pr.bellL.position.set(av.armL.position.x, la - 0.02, av.armL.position.z + 0.16); pr.bellR.position.set(av.armR.position.x, ra - 0.02, av.armR.position.z + 0.16); }
+      if (pr.cup.visible && av.armR) pr.cup.position.set(av.armR.position.x - 0.02, ra + 0.03, av.armR.position.z + 0.19);
       // 站著／走路時顯示腳並貼齊地面；坐著時收起腳、維持原本坐姿
-      // 還在座位（沙發／椅子）範圍內時維持坐姿，離開座位才放下腳
-      const inSeat = f.walker.position.distanceTo(f.loungeSeat.pos) < 0.5 || f.walker.position.distanceTo(f.deskSeat.pos) < 0.5;
-      const standing = (walking || f.busy) && !inSeat;
+      // 還在座位（沙發／椅子）範圍內時維持坐姿，離開座位才放下腳；站立型活動（跑步機、啞鈴、咖啡）一律站著
+      const nearDesk = f.walker.position.distanceTo(f.deskSeat.pos) < 0.5;
+      const nearSit = ls && !ls.stand && f.walker.position.distanceTo(ls.pos) < 0.5;
+      const standing = (act && ls.stand) || ((walking || f.busy || f.commuting) && !nearDesk && !nearSit);
       if (av.legs) {
-        av.legs.visible = standing;
-        if (av.seatFeet) for (const sf of av.seatFeet) sf.visible = !standing;
+        const legsOn = standing || act === 'bike';
+        av.legs.visible = legsOn;
+        if (av.seatFeet) for (const sf of av.seatFeet) sf.visible = !legsOn;
         if (standing) {
-          // 樓梯區（x < -6.2）步幅縮小：擺腿 ±0.5 弧度時小腿側面會掃進上一階踏板的前緣
-          const sw = walking ? Math.sin(t * 9 + f.phase) * (f.walker.position.x < -6.2 ? 0.2 : 0.5) : av.legL.rotation.x * 0.8;
+          const sw = walking ? Math.sin(t * 9 + f.phase) * 0.5 : (act === 'treadmill' ? Math.sin(t * 11 + f.phase) * 0.42 : av.legL.rotation.x * 0.8);
           av.legL.rotation.x = sw; av.legR.rotation.x = -sw;
-          // 樓梯區腳掌保持水平（抵銷擺腿角度）：腳掌斜著時，前上角會先碰到上一階的踏板前緣，把整隻腳抬離本階
-          if (av.feet) { const lv = f.walker.position.x < -6.2; av.feet[0].rotation.x = lv ? -sw : 0; av.feet[1].rotation.x = lv ? sw : 0; }
+          if (av.feet) { av.feet[0].rotation.x = 0; av.feet[1].rotation.x = 0; }
           plantFeet(f);
+        } else if (act === 'bike') {
+          const sw = Math.sin(t * 6 + f.phase) * 0.45;
+          av.legL.rotation.x = sw; av.legR.rotation.x = -sw;
+          f.slot.position.y = SADDLE_TOP - (f.sitMin ?? 0.5);
+        } else if (act === 'yoga') {
+          f.slot.position.y = MAT_TOP - (f.sitMin ?? 0.5); av.legL.rotation.x = av.legR.rotation.x = 0;
+        } else if (act === 'massage') {
+          f.slot.position.y = Math.sin(t * 13) * 0.004; av.legL.rotation.x = av.legR.rotation.x = 0;
         } else if (f.slot.position.y !== 0) { f.slot.position.y = 0; av.legL.rotation.x = av.legR.rotation.x = 0; }
       }
       if (av.spin) av.spin.rotation.y = t * 0.8;
@@ -1141,6 +1257,11 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
       f.ringMat.opacity = r;
       const sc = f.status === 'error' ? 1 + 0.15 * Math.abs(Math.sin(t * 3.5)) : 1;
       f.ring.scale.set(sc, sc, sc);
+    }
+    { // 有人在用時，跑帶捲動、健身車踏板轉動
+      let run = false; for (const f of figures.values()) if (f.act === 'treadmill') run = true;
+      if (run) beltTex.offset.y = (beltTex.offset.y - 0.03) % 1;
+      for (const c of CRANKS) { let on = false; for (const f of figures.values()) if (f.act === 'bike' && Math.abs(f.walker.position.x - c.x) < 0.1 && Math.abs(f.walker.position.z - c.z) < 0.1) { on = true; c.crank.rotation.x = -(t * 6 + f.phase); } }
     }
     controls.update();
     renderer.render(scene, camera);
@@ -1162,22 +1283,24 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   function where(k) {
     const f = figures.get(k); if (!f) return null;
     const fl = Math.round((f.walker.position.y - floorY(1)) / FLOOR_H) + 1;
-    const spot = (f.walk || f.moving || f.carry !== null) ? 'walking' : (f.atDesk ? 'desk' : 'lounge');
-    return { floor: fl, spot, x: +f.walker.position.x.toFixed(2), z: +f.walker.position.z.toFixed(2) };
+    const spot = (f.walk || f.moving || f.carry !== null || f.commuting) ? 'walking' : (f.atDesk ? 'desk' : 'lounge');
+    return { floor: fl, spot, act: f.act || null, restSpot: f.restSpot ? f.restSpot.id : null, session: f.restSession, elev: f.lastElev || null, x: +f.walker.position.x.toFixed(2), y: +f.walker.position.y.toFixed(3), z: +f.walker.position.z.toFixed(2) };
   }
   // 唯讀檢查用：在每次實際畫面輸出時記錄腳底資料
   function footLogCtl(keys, opts = {}) { const prev = footLog; footLog = keys ? { keys, samples: [], body: !!opts.body } : null; return prev ? prev.samples : null; }
   // 唯讀檢查用：每個名牌目前的外框與所屬樓層的上下界（螢幕座標）
-  // 唯讀檢查用：每位角色在自己樓層上，座位／對方座位前方／樓梯口／電梯口兩兩之間能不能找到路（ok=false 代表找不到、只能直線硬走）
+  // 唯讀檢查用：每位角色在自己樓層上，座位／對方座位前方／3F 器材／兩座電梯口與排隊位置兩兩之間能不能找到路（ok=false 代表找不到、只能直線硬走）
   const pathCheck = () => {
     const fails = []; let n = 0;
     for (const [k, f] of figures) {
       const r = bodyRadius(f);
-      for (let fl = 1; fl <= 3; fl++) {
-        const pts = [['stairs', stairHub(fl, r)], ['elevator', ELEV_HUB(fl, r)]];
-        for (const [k2, g] of figures) if (g.floor === fl) { pts.push([k2 + ':deskFront', seatFront(g.deskSeat)], [k2 + ':loungeFront', seatFront(g.loungeSeat)]); if (k2 === k) pts.push([k2 + ':desk', g.deskSeat.pos, true], [k2 + ':lounge', g.loungeSeat.pos, true]); }
-        for (const [na, pa] of pts) for (const [nb, pb, seatB] of pts) { if (na === nb) continue; n++;
-          const ign = [...(na === k + ':desk' ? seatMeshes(f.deskSeat) : na === k + ':lounge' ? seatMeshes(f.loungeSeat) : []), ...(nb === k + ':desk' ? seatMeshes(f.deskSeat) : nb === k + ':lounge' ? seatMeshes(f.loungeSeat) : [])];
+      for (let fl = 1; fl <= TOP_FLOOR; fl++) {
+        const pts = [['elevR', ELEV_HUB(ELEVS[0], fl, r)], ['elevL', ELEV_HUB(ELEVS[1], fl, r)]];
+        for (const e of ELEVS) for (let q = 1; q <= 4; q++) pts.push([`queue${e.side > 0 ? 'R' : 'L'}${q}`, queueSpot(e, fl, r, q)]);
+        for (const [k2, g] of figures) if (g.floor === fl) { pts.push([k2 + ':deskFront', seatFront(g.deskSeat)]); if (k2 === k) pts.push([k2 + ':desk', g.deskSeat.pos, true, g.deskSeat]); }
+        if (fl === GYM_FLOOR) for (const sp of REST_SPOTS) { const st = restSeatOf(sp); pts.push([sp.id + ':front', seatFront(st)], [sp.id, st.pos, true, st]); }
+        for (const [na, pa, , sa] of pts) for (const [nb, pb, seatB, sb] of pts) { if (na === nb) continue; n++;
+          const ign = [...(sa ? seatMeshes(sa) : []), ...(sb ? seatMeshes(sb) : [])];
           const res = planPath(fl, pa, pb, r, ign, !!seatB); if (!res.ok) fails.push(`${k}@${fl}F ${na}→${nb}`); }
       }
     }
@@ -1191,7 +1314,20 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     return { x: +p.x.toFixed(3), y: +p.y.toFixed(3), z: +p.z.toFixed(3), tx: +t.x.toFixed(3), ty: +t.y.toFixed(3), tz: +t.z.toFixed(3), az: +Math.atan2(dx, dz).toFixed(4), polar: +Math.acos(Math.max(-1, Math.min(1, dist ? dy / dist : 0))).toFixed(4), dist: +dist.toFixed(3) };
   };
   window.__aiOfficeCam = camPose;
-  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where, footProbe, bodyProbe, tagBands, pathCheck, camPose, footLog: footLogCtl };
+  // 唯讀檢查用：兩座電梯目前狀態、3F 站位佔用
+  const elevState = () => ELEVS.map(e => ({ side: e.side > 0 ? 'R' : 'L', y: +e.y.toFixed(3), door: +e.door.toFixed(2), pending: e.pending, rides: e.rides }));
+  // 測試用：把休息中的人直接放到指定器材（只換位置，不改分配規則），給身體碰撞／腳底檢查逐一掃過每個器材
+  function restAt(k, id) {
+    const f = figures.get(k), sp = REST_SPOTS.find(s => s.id === id);
+    if (!f || !sp || f.atDesk || f.busy || f.commuting) return false;
+    const owner = spotOwner.get(id); if (owner && owner !== k) return false;
+    if (f.restSpot && spotOwner.get(f.restSpot.id) === k) spotOwner.delete(f.restSpot.id);
+    spotOwner.set(id, k); f.restSpot = sp; f.loungeSeat = restSeatOf(sp);
+    f.walker.position.copy(f.loungeSeat.pos); f.walker.rotation.y = f.loungeSeat.rot; f.dirty = true;
+    return true;
+  }
+  const restState = () => { const o = {}; for (const [id, k] of spotOwner) o[id] = k; return o; };
+  return { update, select, resetView, setInsets, setAvatarSet, deliver, setTheme, floorOf, where, footProbe, bodyProbe, tagBands, pathCheck, camPose, footLog: footLogCtl, elevState, restState, restAt };
 }
 
 export function webglAvailable() {

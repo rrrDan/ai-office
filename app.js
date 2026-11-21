@@ -3,7 +3,7 @@ import { BOTS, STATUS, emptyState, applyNtfy, resolveBot, normStatus, serialize,
 
 const $ = (id) => document.getElementById(id);
 const h = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
-const FLOORS = [[3, '3F', '總管室'], [2, '2F', '工作區'], [1, '1F', '專案大廳'], [0, '其他', '未登記的 bot']];
+const FLOORS = [[4, '4F', '總管室'], [3, '3F', '健身房與休息空間'], [2, '2F', '工作區'], [1, '1F', '專案大廳'], [0, '其他', '未登記的 bot']];
 const POLL_MS = 15000;
 const SSE_OPEN_TIMEOUT = 6000;
 
@@ -213,10 +213,11 @@ function boot() {
     const from = keys[Math.floor(Math.random() * keys.length)];
     const others = keys.filter(k => k !== from); // 寄件人以外的 5 位，平均隨機
     const to = others[Math.floor(Math.random() * others.length)];
-    const same = office.floorOf(to) === office.floorOf(from);
-    const mode = same ? 'auto' : (Math.random() < 0.5 ? 'stairs' : 'elevator');
+    const fl = (k) => (office.where(k) || {}).floor || office.floorOf(k);   // 依目前所在樓層（例如在 3F 休息）
+    const same = fl(to) === fl(from);
+    const mode = same ? 'auto' : 'elevator';
     const meta = (k) => BOTS.find(b => b.key === k).short;
-    $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${same ? '同樓層' : mode === 'stairs' ? '走樓梯' : '搭電梯'}）`;
+    $('demoNote').textContent = `${meta(from)} → ${meta(to)}（${same ? '同樓層' : '搭電梯'}）`;
     setDrawer('peek');
     $('demoBtn').disabled = true;
     try { await enqueueDelivery({ src: 'demo', from, to, mode }); } finally { $('demoBtn').disabled = false; }
@@ -227,7 +228,7 @@ function boot() {
     const { createOffice, webglAvailable } = await import('./office3d.js');
     if (!webglAvailable()) throw new Error('no webgl');
     office = createOffice($('viewport'), $('overlay'), { onSelect: (k) => selectBot(k, true), avatarSet });
-    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m); window.__aiOfficeEnqueue = (a, b, m) => enqueueDelivery({ src: 'test', from: a, to: b, mode: m || 'auto' }); window.__aiOfficeWhere = (k) => office.where(k); window.__aiOfficeFeet = (k) => office.footProbe(k); window.__aiOfficeFootLog = (keys, o) => office.footLog(keys, o); window.__aiOfficeBody = (k) => office.bodyProbe(k); window.__aiOfficeTagBands = () => office.tagBands(); window.__aiOfficePathCheck = () => office.pathCheck();
+    updateInsets(); office.resetView(false); office.setTheme(effectiveTheme()); window.__aiOfficeDeliver = (a, b, m) => office.deliver(a, b, m); window.__aiOfficeEnqueue = (a, b, m) => enqueueDelivery({ src: 'test', from: a, to: b, mode: m || 'auto' }); window.__aiOfficeWhere = (k) => office.where(k); window.__aiOfficeFeet = (k) => office.footProbe(k); window.__aiOfficeFootLog = (keys, o) => office.footLog(keys, o); window.__aiOfficeBody = (k) => office.bodyProbe(k); window.__aiOfficeTagBands = () => office.tagBands(); window.__aiOfficePathCheck = () => office.pathCheck(); window.__aiOfficeElev = () => office.elevState(); window.__aiOfficeRest = () => office.restState(); window.__aiOfficeRestAt = (k, id) => office.restAt(k, id);
     office.update(state);
   }
   function syncHeader() {

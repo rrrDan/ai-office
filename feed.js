@@ -2,7 +2,7 @@
 // 只讀取，不寫入任何訊息。
 
 export const BOTS = [
-  { key: 'nori',   name: 'Nori · CEO · 總管',            short: 'Nori',   floor: 3, color: '#3a3f4b' },
+  { key: 'nori',   name: 'Nori · CEO · 總管',            short: 'Nori',   floor: 4, color: '#3a3f4b' },
   { key: 'meron',  name: 'Meron · 繪圖技術',              short: 'Meron',  floor: 2, color: '#13b7a2' },
   { key: 'yuzu',   name: 'Yuzu · 桌面助理 · 排程助理',     short: 'Yuzu',   floor: 2, color: '#959595' },
   { key: 'goya',   name: 'Goya · 高階編碼專業工程',        short: 'Goya',   floor: 2, color: '#f59312' },
