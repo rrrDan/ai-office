@@ -395,6 +395,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     el.style.setProperty('--floor', FLOOR_COLOR[floor] || FLOOR_COLOR[0]); el.dataset.floor = String(floor);
     const tail = document.createElement('span'); tail.className = 'tag-tail';
     el.append(bubble, tail);
+    el.style.visibility = 'hidden';
     el.addEventListener('click', (ev) => { ev.stopPropagation(); onSelect && onSelect(key); });
     overlay.appendChild(el);
 
@@ -829,7 +830,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   // 點選 3D 人物
   const ray = new THREE.Raycaster(), ndc = new THREE.Vector2();
   let downAt = null;
-  renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; cancelFly(); });
+  renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; cancelFly(); beginTagDrag(); });
   renderer.domElement.addEventListener('pointerup', (e) => {
     if (!downAt || Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]) > 6) return;
     const r = renderer.domElement.getBoundingClientRect();
@@ -862,6 +863,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
   function flyTo(view, ms = 900) { fly = { t0: performance.now(), ms, p0: camera.position.clone(), t0v: controls.target.clone(), p1: view.pos, t1: view.target }; start(); }
   function cancelFly() { fly = null; }
   function resetView(animate = true) {
+    beginTagDrag();
     const v = defaultView();
     if (!animate) { camera.position.copy(v.pos); controls.target.copy(v.target); controls.update(); return; }
     flyTo(v);
@@ -907,192 +909,167 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     const bot = (-vb.y * 0.5 + 0.5) * h;
     return [top, bot];
   }
-  const overlapArea = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
-  // 桌機名牌候選位移：dx ∈ {0, ±0.5, ±1, ±1.5, ±2, ±3}×sx，dy ∈ {0, ±1, ±2}×sy，依距離排序（近的優先）
-  const DESK_CANDS = (sx, sy) => {
-    const out = [];
-    for (const a of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2, -3, 3]) for (const b of [0, -1, 1, -2, 2]) out.push([a * sx, b * sy, Math.hypot(a * sx, b * sy * 1.3)]);
-    return out.sort((p, q) => p[2] - q[2]);
-  };
-  // 手機候選格更密（含半格上下），旋轉時才有足夠位置避開四位聚在 2F 休息區的名牌
-  const MOBILE_CANDS = (sx, sy) => {
-    const out = [];
-    for (const a of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2, -2.5, 2.5, -3, 3]) for (const b of [0, -0.5, 0.5, -1, 1, -1.5, 1.5, -2, 2]) out.push([a * sx, b * sy, Math.hypot(a * sx, b * sy * 1.3)]);
-    return out.sort((p, q) => p[2] - q[2]);
-  };
+  const OCCLUSION_GAP = 3;     // 隱藏後要再顯示，聯集至少再分開 3px（此距離內視為仍被擋住，以符合準則 5）
+  const DEPTH_EPS = 0.25;      // 世界座標；兩人距鏡頭差小於此值時沿用目前的前後關係，避免每幀互換
+  let tagCamSig = '', tagDragGen = 0;
+  function beginTagDrag() {
+    tagDragGen++;
+    tagCamSig = '';
+    for (const f of figures.values()) f._tagDepthRank = undefined;
+  }
   function placeTags() {
     const w = container.clientWidth, h = container.clientHeight;
-    const list = [];
-    for (const f of figures.values()) {
-      v.copy(f.anchor).project(camera);
-      const vis = v.z < 1 && v.x > -1.15 && v.x < 1.15 && v.y > -1.15 && v.y < 1.15;
-      f.el.style.visibility = vis ? 'visible' : 'hidden';
-      if (!vis) { f._tagDisp = f._tagDispOff = f._tagOff = null; continue; }
-      if (f.dirty) { f.el.classList.remove('squeeze'); f.dirty = false; }
-      f.size = [f.el.offsetWidth, f.el.offsetHeight];
-      list.push({ f, z: v.z, x: (v.x * 0.5 + 0.5) * w, y: (-v.y * 0.5 + 0.5) * h, band: bandOf(f, w, h) });
-    }
-    // 名牌避讓：優先沿用上一幀的偏移（沒撞到才換格），再以候選格＋迭代分離算出不重疊的目標，
-    // 畫面位置朝目標每幀最多走約 20px，避免鏡頭阻尼時單幀跳格；重疊以泡泡＋狀態圖示的聯集為準
-    list.sort((a, b) => (b.f.key === selected) - (a.f.key === selected) || a.z - b.z);
-    const MAX_STEP = 20;
+    const camPos = camera.position;
+    const sig = [camPos.x, camPos.y, camPos.z, controls.target.x, controls.target.y, controls.target.z].map((n) => n.toFixed(4)).join();
+    const camStill = (sig === tagCamSig);
+    tagCamSig = sig;
+
+    const makeR = (x0, y1, tw, th) => ({ x0, x1: x0 + tw, y0: y1 - th, y1 });
     const fxPad = (f) => {
       const tag = f.el.getBoundingClientRect(), bubble = f.el.querySelector('.tag-bubble')?.getBoundingClientRect();
-      const fx = f.el.querySelector('.tag-fx'), fxr = (fx && fx.textContent.trim()) ? fx.getBoundingClientRect() : null;
+      const fx = f.el.querySelector('.tag-fx');
+      const fxs = fx ? getComputedStyle(fx) : null;
+      const fxr = (fx && fxs && fxs.display !== 'none' && fxs.visibility !== 'hidden' && fx.textContent.trim()) ? fx.getBoundingClientRect() : null;
       const reserve = { l: 0, t: compactTags ? 8 : 10, r: compactTags ? 8 : 10, b: 0 };
-      let pad;
-      if (!bubble || !tag.width) pad = { ...reserve };
-      else {
-        const u0 = Math.min(bubble.left, fxr ? fxr.left : bubble.left), u1 = Math.max(bubble.right, fxr ? fxr.right : bubble.right);
-        const v0 = Math.min(bubble.top, fxr ? fxr.top : bubble.top), v1 = Math.max(bubble.bottom, fxr ? fxr.bottom : bubble.bottom);
-        pad = { l: Math.max(0, tag.left - u0), t: Math.max(0, tag.top - v0), r: Math.max(0, u1 - tag.right), b: Math.max(0, v1 - tag.bottom) };
-      }
-      // 狀態圖示出現／消失時不要讓碰撞盒忽大忽小，否則阻尼後期會被強制分開而單幀大跳。
-      const hold = f._fxPadMax || reserve;
-      pad = { l: Math.max(pad.l, hold.l, reserve.l), t: Math.max(pad.t, hold.t, reserve.t), r: Math.max(pad.r, hold.r, reserve.r), b: Math.max(pad.b, hold.b, reserve.b) };
-      f._fxPadMax = pad;
-      return pad;
+      if (!bubble || !tag.width) return reserve;
+      const u0 = Math.min(bubble.left, fxr ? fxr.left : bubble.left), u1 = Math.max(bubble.right, fxr ? fxr.right : bubble.right);
+      const v0 = Math.min(bubble.top, fxr ? fxr.top : bubble.top), v1 = Math.max(bubble.bottom, fxr ? fxr.bottom : bubble.bottom);
+      return {
+        l: Math.max(reserve.l, tag.left - u0),
+        t: Math.max(reserve.t, tag.top - v0),
+        r: Math.max(reserve.r, u1 - tag.right),
+        b: Math.max(reserve.b, v1 - tag.bottom)
+      };
     };
+    const unionOf = (rec, pad) => ({ x0: rec.x0 - pad.l, x1: rec.x1 + pad.r, y0: rec.y0 - pad.t, y1: rec.y1 + pad.b });
+    const sepAxes = (A, B) => {
+      const ox = Math.min(A.x1, B.x1) - Math.max(A.x0, B.x0);
+      const oy = Math.min(A.y1, B.y1) - Math.max(A.y0, B.y0);
+      return [ox, oy];
+    };
+    // 已顯示的名牌：以 Nori 的 0.5px 為準隱藏；已隱藏的：空隙達 OCCLUSION_GAP 才再顯示
+    const blocks = (shownU, otherU, wasShown) => {
+      const [ox, oy] = sepAxes(shownU, otherU);
+      if (wasShown) return ox > 0.5 && oy > 0.5;
+      return ox > -OCCLUSION_GAP && oy > -OCCLUSION_GAP;
+    };
+
     const items = [];
-    const makeR = (x0, y1, tw, th) => ({ x0, x1: x0 + tw, y0: y1 - th, y1 });
-    const hitR = (obj, rec) => { const p = obj.pad; return { x0: rec.x0 - p.l, x1: rec.x1 + p.r, y0: rec.y0 - p.t, y1: rec.y1 + p.b }; };
-    const clampYOf = (it, th, bottom) => {
-      const [bTop, bBot] = it.band, minB = bTop + th;
-      return Math.max(minB, Math.min(Math.max(minB, bBot), bottom));
-    };
-    for (const it of list) {
-      const [tw, th] = it.f.size, pad = fxPad(it.f);
-      const clampX = (x0) => Math.max(4, Math.min(w - tw - 4, x0));
-      const clampY = (bottom) => clampYOf(it, th, bottom);
-      let best = null;
-      const off = it.f._tagOff;
-      if (off) {
-        const r = makeR(clampX(it.x - tw / 2 + off.dx), clampY(it.y + off.dy), tw, th);
-        let ov = 0; for (const p of items) ov += overlapArea(hitR({ pad }, r), hitR(p, p.r));
-        if (ov === 0) best = { r, cost: 0, ov: 0 };
-      }
-      if (!best) {
-        const sx = tw * 0.55 + 4, sy = th + 4;
-        const cands = compactTags ? MOBILE_CANDS(sx, sy) : DESK_CANDS(sx, sy);
-        for (const [dx, dy] of cands) {
-          const r = makeR(clampX(it.x - tw / 2 + dx), clampY(it.y + dy), tw, th);
-          let ov = 0; for (const p of items) ov += overlapArea(hitR({ pad }, r), hitR(p, p.r));
-          const cost = ov * 200 + Math.abs(r.x0 + tw / 2 - it.x) + Math.abs(r.y1 - it.y) * 1.3;
-          if (!best || cost < best.cost) best = { r, cost, ov };
-          if (ov === 0) break;
+    for (const f of figures.values()) {
+      v.copy(f.anchor).project(camera);
+      const onScreen = v.z < 1 && v.x > -1.15 && v.x < 1.15 && v.y > -1.15 && v.y < 1.15;
+      if (f.dirty) { f.el.classList.remove('squeeze'); f.dirty = false; }
+      const [tw, th] = [f.el.offsetWidth, f.el.offsetHeight];
+      f.size = [tw, th];
+      const x = (v.x * 0.5 + 0.5) * w, y = (-v.y * 0.5 + 0.5) * h;
+      const band = bandOf(f, w, h);
+      const [bTop, bBot] = band;
+      const minB = bTop + th, maxB = Math.max(minB, bBot);
+      // 固定錨點正上方，只把底邊連續夾進樓層帶與畫面內，不換格、不推開
+      let x0 = Math.max(4, Math.min(w - tw - 4, x - tw / 2));
+      let y1 = Math.max(minB, Math.min(maxB, y));
+      x0 = Math.round(x0 * 10) / 10;
+      y1 = Math.round(y1 * 10) / 10;
+      // 可見時單幀左上角最多 19.4 px（含鏡頭阻尼與夾帶），避免偶爾超過 20
+      if (f._tagDisp && f._tagShown) {
+        const px = f._tagDisp.x0, py = f._tagDisp.y0;
+        const d = Math.hypot(x0 - px, (y1 - th) - py);
+        const MAX = 19.4;
+        if (d > MAX) {
+          const k = MAX / d;
+          x0 = px + (x0 - px) * k;
+          const y0 = py + ((y1 - th) - py) * k;
+          y1 = y0 + th;
         }
       }
-      items.push({ it, tw, th, pad, r: best.r, ov: best.ov });
+      // 限速後再夾回樓層帶與畫面，避免帶跟著人移動時短暫出界
+      x0 = Math.max(4, Math.min(w - tw - 4, x0));
+      y1 = Math.max(minB, Math.min(maxB, y1));
+      x0 = Math.round(x0 * 10) / 10;
+      y1 = Math.round(y1 * 10) / 10;
+      const rec = makeR(x0, y1, tw, th);
+      const pad = fxPad(f);
+      const dist = camPos.distanceTo(f.anchor);
+      items.push({ f, onScreen, tw, th, rec, pad, uni: unionOf(rec, pad), dist, band, x, y });
     }
-    const slackX = (obj, rec, dir) => dir < 0 ? Math.max(0, rec.x0 - 4) : Math.max(0, (w - obj.tw - 4) - rec.x0);
-    const slackY = (obj, rec, dir) => {
-      const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
-      return dir < 0 ? Math.max(0, rec.y1 - minB) : Math.max(0, maxB - rec.y1);
-    };
-    const clampRec = (obj, rec) => {
-      const [bTop, bBot] = obj.it.band, minB = bTop + obj.th, maxB = Math.max(minB, bBot);
-      rec.x0 = Math.max(4, Math.min(w - obj.tw - 4, rec.x0)); rec.y1 = Math.max(minB, Math.min(maxB, rec.y1));
-      rec.x1 = rec.x0 + obj.tw; rec.y0 = rec.y1 - obj.th;
-    };
-    const shiftRec = (obj, rec, dx, dy) => { rec.x0 += dx; rec.x1 += dx; rec.y0 += dy; rec.y1 += dy; clampRec(obj, rec); };
-    const separate = (getR) => {
-      const totalOv = () => {
-        let s = 0;
-        for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++)
-          s += overlapArea(hitR(items[i], getR(items[i])), hitR(items[j], getR(items[j])));
-        return s;
-      };
-      const tryShift = (A, B, ra, rb, dxA, dyA, dxB, dyB) => {
-        const sa = { x0: ra.x0, x1: ra.x1, y0: ra.y0, y1: ra.y1 }, sb = { x0: rb.x0, x1: rb.x1, y0: rb.y0, y1: rb.y1 };
-        shiftRec(A, ra, dxA, dyA); shiftRec(B, rb, dxB, dyB);
-        const ov = totalOv();
-        ra.x0 = sa.x0; ra.x1 = sa.x1; ra.y0 = sa.y0; ra.y1 = sa.y1;
-        rb.x0 = sb.x0; rb.x1 = sb.x1; rb.y0 = sb.y0; rb.y1 = sb.y1;
-        return ov;
-      };
-      for (let iter = 0; iter < 40; iter++) {
-        let moved = false;
-        for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
-          const A = items[i], B = items[j], ra = getR(A), rb = getR(B);
-          const ha = hitR(A, ra), hb = hitR(B, rb);
-          const ox = Math.min(ha.x1, hb.x1) - Math.max(ha.x0, hb.x0);
-          const oy = Math.min(ha.y1, hb.y1) - Math.max(ha.y0, hb.y0);
-          if (ox <= 0 || oy <= 0) continue;
-          const selA = A.it.f.key === selected, selB = B.it.f.key === selected;
-          const dirX = (ha.x0 + ha.x1 <= hb.x0 + hb.x1) ? -1 : 1;
-          const dirY = (ha.y0 + ha.y1 <= hb.y0 + hb.y1) ? -1 : 1;
-          const slX = slackX(A, ra, dirX) + slackX(B, rb, -dirX);
-          const slY = slackY(A, ra, dirY) + slackY(B, rb, -dirY);
-          const wX = slX > 0.01 ? (selA && !selB ? 0 : (selB && !selA ? 1 : (slackX(A, ra, dirX) / slX))) : 0;
-          const wY = slY > 0.01 ? (selA && !selB ? 0 : (selB && !selA ? 1 : (slackY(A, ra, dirY) / slY))) : 0;
-          const takeX = slX > 0.01 ? Math.min(ox + 1, slX) : 0;
-          const takeY = slY > 0.01 ? Math.min(oy + 1, slY) : 0;
-          const cur = totalOv();
-          const ovX = takeX ? tryShift(A, B, ra, rb, dirX * takeX * wX, 0, -dirX * takeX * (1 - wX), 0) : cur;
-          const ovY = takeY ? tryShift(A, B, ra, rb, 0, dirY * takeY * wY, 0, -dirY * takeY * (1 - wY)) : cur;
-          // 用整體剩餘重疊選軸（避免這一對往上/下讓開卻撞到第三人）。
-          // 兩軸一樣乾淨時走位移較小的軸，避免只差幾個 px 的 pad 重疊被左右推開上百 px。
-          const useX = takeX && (ovX < ovY || (ovX === ovY && ovX < cur && takeX <= (takeY || Infinity)));
-          const useY = takeY && !useX && ovY < cur;
-          if (useX) shiftRec(A, ra, dirX * takeX * wX, 0), shiftRec(B, rb, -dirX * takeX * (1 - wX), 0);
-          else if (useY) shiftRec(A, ra, 0, dirY * takeY * wY), shiftRec(B, rb, 0, -dirY * takeY * (1 - wY));
-          else continue;
-          moved = true;
+
+    const on = items.filter((o) => o.onScreen);
+    on.sort((a, b) => {
+      const d = a.dist - b.dist;
+      if (Math.abs(d) <= DEPTH_EPS) {
+        const ra = a.f._tagDepthRank, rb = b.f._tagDepthRank;
+        if (ra != null && rb != null && ra !== rb) return ra - rb;
+      }
+      return d;
+    });
+    on.forEach((o, i) => { o.f._tagDepthRank = i; });
+
+    // 鏡頭與各牌子畫面位置都幾乎不變時，凍結可見性以免數值抖動（準則 3）。
+    // 有人走動、或先前已可見卻重疊時，仍跑貪心遮蔽（準則 1、5 優先於凍結）。
+    const platesMoved = on.some((o) => {
+      const d = o.f._tagDisp;
+      if (!d) return true;
+      return Math.hypot(o.rec.x0 - d.x0, o.rec.y0 - d.y0) > 0.5;
+    });
+    if (camStill && !platesMoved) {
+      for (const o of on) o.want = (o.f._tagShown === true);
+    } else {
+      const accepted = [];
+      for (const o of on) {
+        const wasShown = o.f._tagShown === true;
+        let hit = false;
+        for (const s of accepted) {
+          if (blocks(s.uni, o.uni, wasShown)) { hit = true; break; }
         }
-        if (!moved) break;
-      }
-    };
-    const hitsOverlap = (getR) => {
-      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++)
-        if (overlapArea(hitR(items[i], getR(items[i])), hitR(items[j], getR(items[j]))) > 0) return true;
-      return false;
-    };
-    separate(o => o.r);
-    // 畫面位置：從上一幀出發，先夾進新的樓層帶，再朝目標最多走 MAX_STEP。
-    // 若這樣會重疊，就縮小步進（二分）；只有夾進樓層後仍重疊時，才強制分開。
-    for (const obj of items) {
-      // 畫面位置跟錨點走（沿用上一幀相對偏移），格位切換再以 MAX_STEP 靠近目標。
-      const prev = obj.it.f._tagDispOff;
-      if (prev) {
-        obj.disp = makeR(obj.it.x - obj.tw / 2 + prev.dx, obj.it.y + prev.dy, obj.tw, obj.th);
-        clampRec(obj, obj.disp);
-      } else {
-        obj.disp = makeR(obj.r.x0, obj.r.y1, obj.tw, obj.th);
+        o.want = !hit;
+        if (o.want) accepted.push(o);
       }
     }
-    // 夾進樓層帶後若畫面位置已重疊，先分開（目標格已在 obj.r 解完）。
-    // 再朝目標每幀最多走 MAX_STEP；若這一步會重疊就二分縮小步進。
-    if (hitsOverlap(o => o.disp)) separate(o => o.disp);
-    const base = items.map(o => ({ x0: o.disp.x0, y1: o.disp.y1 }));
-    const applyT = (t) => {
-      for (let i = 0; i < items.length; i++) {
-        const obj = items[i], b = base[i];
-        let x0 = b.x0 + (obj.r.x0 - b.x0) * t, y1 = b.y1 + (obj.r.y1 - b.y1) * t;
-        const dist = Math.hypot(x0 - b.x0, y1 - b.y1);
-        if (dist > MAX_STEP && t > 0) { const k = MAX_STEP / dist; x0 = b.x0 + (x0 - b.x0) * k; y1 = b.y1 + (y1 - b.y1) * k; }
-        obj.disp = makeR(x0, y1, obj.tw, obj.th);
-        clampRec(obj, obj.disp);
-      }
+
+    for (const o of items) {
+      const show = !!(o.onScreen && o.want);
+      o.f._tagShown = show;
+      o.f.el.style.visibility = show ? 'visible' : 'hidden';
+      o.f.el.style.opacity = '';
+      o.f.el.style.transform = `translate3d(${o.rec.x0.toFixed(1)}px, ${o.rec.y0.toFixed(1)}px, 0)`;
+      o.f._tagBand = o.band;
+      o.f._tagRect = [o.rec.x0, o.rec.y0, o.rec.x1, o.rec.y1];
+      o.f._tagDisp = { x0: o.rec.x0, y0: o.rec.y0, x1: o.rec.x1, y1: o.rec.y1 };
+      o.f._tagDist = o.dist;
+      o.f.el.classList.remove('squeeze', 'shifted');
+    }
+    // 同一幀再讀一次 DOM 聯集：若兩個可見名牌仍重疊（四捨五入／圖示），立刻隱藏較遠的那個
+    const visNow = items.filter((o) => o.f._tagShown);
+    const readUnion = (el) => {
+      const bubble = el.querySelector('.tag-bubble')?.getBoundingClientRect();
+      const fx = el.querySelector('.tag-fx');
+      const fxs = fx ? getComputedStyle(fx) : null;
+      const fxr = (fx && fxs && fxs.display !== 'none' && fxs.visibility !== 'hidden' && fx.textContent.trim()) ? fx.getBoundingClientRect() : null;
+      const r = el.getBoundingClientRect();
+      let u = bubble ? { x0: bubble.left, y0: bubble.top, x1: bubble.right, y1: bubble.bottom } : { x0: r.left, y0: r.top, x1: r.right, y1: r.bottom };
+      if (fxr && fxr.width > 0 && fxr.height > 0) u = { x0: Math.min(u.x0, fxr.left), y0: Math.min(u.y0, fxr.top), x1: Math.max(u.x1, fxr.right), y1: Math.max(u.y1, fxr.bottom) };
+      return u;
     };
-    applyT(1);
-    if (hitsOverlap(o => o.disp)) {
-      let lo = 0, hi = 1;
-      for (let k = 0; k < 12; k++) { const mid = (lo + hi) / 2; applyT(mid); if (hitsOverlap(o => o.disp)) hi = mid; else lo = mid; }
-      applyT(lo);
+    {
+      const urs = visNow.map((o) => ({ o, u: readUnion(o.f.el) }));
+      urs.sort((a, b) => a.o.dist - b.o.dist);
+      const keep = [];
+      for (const it of urs) {
+        let hit = false;
+        for (const k of keep) {
+          const [ox, oy] = sepAxes(it.u, k.u);
+          if (ox > 0.5 && oy > 0.5) { hit = true; break; }
+        }
+        if (hit) {
+          it.o.f._tagShown = false;
+          it.o.f.el.style.visibility = 'hidden';
+        } else keep.push(it);
+      }
     }
-    for (const obj of items) {
-      const r = obj.disp, [bTop, bBot] = obj.it.band;
-      let still = 0; for (const o of items) if (o !== obj) still += overlapArea(hitR(obj, r), hitR(o, o.disp));
-      obj.it.f._tagBand = [bTop, bBot]; obj.it.f._tagRect = [r.x0, r.y0, r.x1, r.y1];
-      obj.it.f._tagDisp = { x0: r.x0, y0: r.y0, x1: r.x1, y1: r.y1 };
-      obj.it.f._tagDispOff = { dx: r.x0 + obj.tw / 2 - obj.it.x, dy: r.y1 - obj.it.y };
-      obj.it.f._tagOff = { dx: (obj.r.x0 + obj.tw / 2) - obj.it.x, dy: obj.r.y1 - obj.it.y };
-      obj.it.f.el.classList.toggle('squeeze', still > obj.tw * obj.th * 0.12 && !obj.it.f.el.classList.contains('sel'));
-      obj.it.f.el.style.transform = `translate3d(${r.x0.toFixed(1)}px, ${r.y0.toFixed(1)}px, 0)`;
-      const shifted = Math.abs(r.x0 + obj.tw / 2 - obj.it.x) > 6 || Math.abs(r.y1 - obj.it.y) > 6;
-      obj.it.f.el.classList.toggle('shifted', shifted);
-    }
-    list.forEach((it, i) => { it.f.el.style.zIndex = String(it.f.key === selected ? 999 : 100 - i); });
+
+    const visList = items.filter((o) => o.f._tagShown);
+    visList.sort((a, b) => a.dist - b.dist);
+    visList.forEach((o, i) => { o.f.el.style.zIndex = String(o.f.key === selected ? 999 : 200 - i); });
   }
 
   // 動畫迴圈：分頁隱藏或不在畫面時暫停
@@ -1206,7 +1183,7 @@ export function createOffice(container, overlay, { onSelect, avatarSet = DEFAULT
     }
     return { checked: n, fails };
   };
-  const tagBands = () => { const o = {}; for (const [k, f] of figures) if (f._tagRect) o[k] = { rect: f._tagRect.map(v => +v.toFixed(1)), band: f._tagBand.map(v => +v.toFixed(1)), floor: where(k).floor }; return o; };
+  const tagBands = () => { const o = {}; for (const [k, f] of figures) if (f._tagRect && f._tagShown) o[k] = { rect: f._tagRect.map(v => +v.toFixed(1)), band: f._tagBand.map(v => +v.toFixed(1)), floor: where(k).floor, dist: f._tagDist }; return o; };
   // 唯讀檢查用：鏡頭位置與方位角（證明觸控拖曳真的有轉動鏡頭）
   const camPose = () => {
     const p = camera.position, t = controls.target, dx = p.x - t.x, dy = p.y - t.y, dz = p.z - t.z;
